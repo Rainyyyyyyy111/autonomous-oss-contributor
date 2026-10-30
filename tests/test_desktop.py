@@ -296,6 +296,26 @@ def test_rate_limit_persists_backoff_without_model_or_chat(rig):
     assert not rig[1].desktop_jobs()
 
 
+def test_rate_limit_during_handoff_preserves_it_for_bounded_retry(rig, tmp_path):
+    desktop = Desktop(rig[4])
+    action = desktop.tick()
+    original = rig[2].issue
+
+    def limited(*args):
+        raise RateLimited(120)
+
+    rig[2].issue = limited
+    result, path = complete(desktop, action, tmp_path)
+    assert "backoff" in result["reason"]
+    assert rig[1].desktop_job(action["ticket"])["state"] == "attached"
+    assert float(rig[1].meta("github_retry_after")) > time.time() + 100
+    assert not rig[2].published
+    rig[2].issue = original
+    rig[1].set_meta("github_retry_after", "0")
+    desktop.finish(action["ticket"], path)
+    assert len(rig[2].published) == 1
+
+
 def test_installed_skill_is_bundled_and_existing_copy_is_preserved(tmp_path):
     target = install_skill(tmp_path / "skills", tmp_path / "config.toml")
     assert (target / "SKILL.md").is_file()

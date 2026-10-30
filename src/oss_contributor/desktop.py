@@ -608,6 +608,13 @@ class Desktop:
                 return self.result(reason=updated["status"], task_id=task["id"])
         except (ContributorError, OSError, ValueError) as exc:
             current = self.store.get(task["id"])
+            if isinstance(exc, RateLimited):
+                self.store.set_meta("github_retry_after", str(time.time() + exc.seconds))
+                if current["status"] not in {"validated", "publishing"}:
+                    return self.result(
+                        reason="GitHub server-requested backoff; handoff retained",
+                        task_id=task["id"],
+                    )
             if isinstance(exc, PublicationConflict):
                 if job["state"] not in {"complete", "failed"}:
                     self.settle(job, "failed")
