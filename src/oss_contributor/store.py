@@ -189,13 +189,25 @@ class Store:
             )
 
     def desktop_jobs(self, active_only: bool = True) -> list[dict]:
-        query = "SELECT * FROM desktop_jobs"
-        if active_only:
-            query += " WHERE state IN ('dispatching','attached','validating')"
-        return [
+        jobs = [
             {**dict(row), "data": json.loads(row["data"])}
-            for row in self.db.execute(query + " ORDER BY created").fetchall()
+            for row in self.db.execute("SELECT * FROM desktop_jobs ORDER BY created").fetchall()
         ]
+        if not active_only:
+            return jobs
+        active = [
+            job
+            for job in jobs
+            if job["state"] in {"dispatching", "attached", "validating", "cancelling"}
+        ]
+        if active:
+            return active
+        # 0.2 failed leases did not persist native termination. Reconcile one at a time.
+        return [
+            job
+            for job in jobs
+            if job["state"] == "failed" and not job["data"].get("thread_stopped")
+        ][:1]
 
     def desktop_job(self, ticket: str) -> dict:
         row = self.db.execute("SELECT * FROM desktop_jobs WHERE ticket=?", (ticket,)).fetchone()
@@ -207,8 +219,14 @@ class Store:
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO desktop_jobs VALUES(?,?,?,?,?,?)",
-                (job["ticket"], job["task"], job["state"], json.dumps(job["data"]),
-                 job["created"], job["expires"]),
+                (
+                    job["ticket"],
+                    job["task"],
+                    job["state"],
+                    json.dumps(job["data"]),
+                    job["created"],
+                    job["expires"],
+                ),
             )
 
     def notify(self, fingerprint: str, **data):
@@ -218,14 +236,17 @@ class Store:
                 (fingerprint, json.dumps(data)),
             )
 
-    def notifications(self) -> list[dict]:
+    def notifications(self, include_acknowledged: bool = False) -> list[dict]:
+        query = "SELECT id,data FROM notifications"
+        if not include_acknowledged:
+            query += " WHERE acknowledged=0"
         return [
             {"id": row["id"], **json.loads(row["data"])}
-            for row in self.db.execute(
-                "SELECT id,data FROM notifications WHERE acknowledged=0 ORDER BY id"
-            ).fetchall()
+            for row in self.db.execute(query + " ORDER BY id").fetchall()
         ]
 
     def acknowledge(self, ids: list[int]):
         with self.db:
-            self.db.executemany("UPDATE notifications SET acknowledged=1 WHERE id=?", [(i,) for i in ids])
+            self.db.executemany(
+                "UPDATE notifications SET acknowledged=1 WHERE id=?", [(i,) for i in ids]
+            )

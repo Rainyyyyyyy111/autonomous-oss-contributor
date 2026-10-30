@@ -26,3 +26,5 @@ Generated tests and upstream test harnesses execute arbitrary code inside the sa
 SQLite/event logs may contain upstream code, issue text, feedback and command output. Keep state directories private. Log output is bounded, but there is no comprehensive secret redactor; do not run targets containing private secrets or publish raw logs. `pause` blocks new calls/publication but may not interrupt a bounded operation already in progress.
 
 This project does not promise autonomous correctness, upstream acceptance, perfect prompt-injection resistance, or credential safety against a compromised trusted component.
+
+Runtime scope is persisted in the local state database and enforced by the controller/Engine. It is not a substitute for repository authorization or a boundary against a hostile process running as the operator. `desktop stopped` records the coordinating App's observed terminal result; Python cannot independently attest it. A generated handoff cannot provide that acknowledgement. Managed skill hashes detect customized vendor files during upgrades; they are not a cryptographic signature or a general-purpose secret scanner.

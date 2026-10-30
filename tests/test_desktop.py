@@ -42,6 +42,7 @@ def complete(desktop, action, tmp_path, **updates):
         or "native-" + action["ticket"]
     )
     desktop.attach(action["ticket"], thread_id)
+    desktop.confirm_stopped(action["ticket"], thread_id)
     path = Path(action["handoff_path"])
     path.write_text(handoff(action, **updates).model_dump_json())
     return desktop.finish(action["ticket"], path), path
@@ -119,7 +120,7 @@ def test_conflicting_issue_is_skipped_before_native_budget(rig):
     assert rig[1].usage()["model_seconds"] == 0
 
 
-def test_expired_chat_pauses_instead_of_silently_creating_another(rig):
+def test_expired_chat_keeps_slot_until_termination_is_confirmed(rig):
     desktop = Desktop(rig[4])
     action = desktop.tick()
     desktop.attach(action["ticket"], "native-chat-1")
@@ -128,11 +129,15 @@ def test_expired_chat_pauses_instead_of_silently_creating_another(rig):
     job["expires"] = time.time() - 1
     rig[1].save_desktop_job(job)
     result = desktop.tick()
-    assert result["action"] == "wait"
-    assert rig[1].meta("paused")
+    assert result["action"] == "cancel"
+    assert rig[1].desktop_jobs()[0]["state"] == "cancelling"
+    rig[1].set_meta("paused", "")  # Resume cannot release an unconfirmed native chat.
+    assert desktop.tick()["action"] == "cancel"
     assert rig[1].usage()["attempts"] == 1
     assert rig[1].usage()["model_seconds"] == rig[0].limits.task_seconds
-    assert len(result["notifications"]) == 1
+    desktop.confirm_stopped(action["ticket"], "native-chat-1")
+    assert not rig[1].desktop_jobs()
+    assert len(rig[1].notifications()) == 1
 
 
 def test_job_cannot_be_attached_to_two_chats(rig):
@@ -163,6 +168,7 @@ def test_handoff_identity_and_schema_reject_worker_authorization(rig, tmp_path):
     desktop = Desktop(rig[4])
     action = desktop.tick()
     desktop.attach(action["ticket"], "native-chat-1")
+    desktop.confirm_stopped(action["ticket"], "native-chat-1")
     path = Path(action["handoff_path"])
     payload = handoff(action).model_dump()
     payload["ticket"] = "different-job"
@@ -345,6 +351,8 @@ def test_handoff_outside_job_directory_and_symlink_are_rejected(rig, tmp_path):
 def test_interrupted_validation_does_not_publish_a_worker_claim(rig):
     desktop = Desktop(rig[4])
     action = desktop.tick()
+    desktop.attach(action["ticket"], "native-chat-1")
+    desktop.confirm_stopped(action["ticket"], "native-chat-1")
     job = rig[1].desktop_job(action["ticket"])
     job["state"] = "validating"
     rig[1].save_desktop_job(job)
@@ -380,7 +388,7 @@ def test_active_revision_requests_cancellation_when_pr_is_closed(rig, tmp_path):
     result = desktop.tick()
     assert result["action"] == "cancel"
     assert result["thread_id"] == "fresh-revision-chat"
-    desktop.fail(revision["ticket"], "confirmed stopped")
+    desktop.confirm_stopped(revision["ticket"], "fresh-revision-chat")
     assert rig[1].get(first["task_id"])["status"] == "closed"
 
 
@@ -427,6 +435,9 @@ def test_desktop_cli_setup_uses_empty_allowlist_and_real_native_tools(tmp_path):
     runner = CliRunner()
     config = tmp_path / "config.toml"
     assert runner.invoke(app, ["init", "-c", str(config)]).exit_code == 0
+    config.write_text(
+        "state_dir = " + json.dumps(str(tmp_path / "state")) + "\n" + config.read_text()
+    )
     result = runner.invoke(app, ["desktop", "setup", "-c", str(config)])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)

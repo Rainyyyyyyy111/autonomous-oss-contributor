@@ -8,7 +8,7 @@ The Python controller owns authorization, budgets, state transitions, verificati
 | `store.py` | SQLite tasks/usage/events, worker lock, processed-feedback IDs, JSONL mirror |
 | `github.py` | Host `gh` API adapter, public evidence, fork/commit/PR recovery, current-head CI/review |
 | `codex.py` | Version-pinned App Server adapter, isolated config, structured output, restricted dynamic tools |
-| `desktop.py`, bundled skill | Primary native-chat autopilot: automatic selection, durable leases/cursors, strict handoffs, independent verification/publication and notification delivery |
+| `desktop.py`, `installation.py`, bundled skill | Primary native-chat autopilot: automatic selection, durable leases/cursors, strict handoffs, independent verification/publication and notification delivery |
 | `sandbox.py`, `runtime/` | Docker lifecycle, PyPI proxy, offline execution, bounded file bridge |
 | `safety.py` | Paths, archives, contribution evidence heuristics, patch and regression checks |
 | `engine.py` | Baseline → assessment → failing regression → repair → clean verification → publication → observation |
@@ -36,3 +36,9 @@ The standalone `run` CLI uses this optional adapter. The primary desktop autopil
 5. Apply file/line limits and fresh publication evidence. Only the controller's actual report permits publication.
 
 Full-suite commands currently use their actual exit codes; they do not universally parse each framework's skipped-test reports. Operators must configure complete commands and review test relevance. See [SECURITY.md](../SECURITY.md) for the limits of generated tests and untrusted harnesses.
+
+## Runtime authorization and cancellation
+
+A persisted monitor freezes task/repository/issue/PR identities. The controller and shared Engine enforce it before dispatch, observation, recovery and publication; scoped notices/acknowledgements do not affect other tasks. Full autopilot is a separate explicit runtime scope and still cannot extend the repository allowlist.
+
+Native cancellation remains an active job and holds the model reservation/serial slot until the coordinating App confirms termination. Handoff collection also requires that acknowledgement. Budget settlement is idempotent, including legacy failed-lease reconciliation. This is an explicit coordinator protocol, not cryptographic attestation of an App process.

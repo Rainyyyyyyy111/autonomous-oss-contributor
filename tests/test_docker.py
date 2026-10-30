@@ -86,6 +86,7 @@ def test_native_handoff_uses_real_clean_docker_without_cli_model(rig):
     action = desktop.tick()
     assert action["action"] == "dispatch"
     desktop.attach(action["ticket"], "fixture-native-chat")
+    desktop.confirm_stopped(action["ticket"], "fixture-native-chat")
     handoff = Handoff(
         ticket=action["ticket"], outcome="fixed",
         assessment=Assessment(suitable=True, reason="small arithmetic bug", evidence=["wrong operator"],

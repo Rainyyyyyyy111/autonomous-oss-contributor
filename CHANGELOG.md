@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0a1 — 2026-10-30
+
+Automatic operation with enforced runtime scope and confirmed native-chat lifecycle.
+
+- Persist fixed-PR monitor identities or allowlisted autopilot scope. Scope applies to chat tickets, observation, publication recovery, notifications and standalone publication entry points; missing a CLI flag cannot expand a fixed monitor.
+- Retain cancelling chats and their model reservations/serial slot until the coordinator records actual native termination. Add `desktop stopped`, late creation reconciliation and conservative 0.2 failed-lease migration; pause/resume cannot bypass confirmation.
+- Add read-only `desktop status` for local scope, active jobs, budget/reset time and blockers, with no model/network activity.
+- Safely upgrade vendor-managed skills with `install-skill --upgrade`, preserving configuration/extra files and refusing local modifications or linked paths. Interrupted resource upgrades can resume.
+- Scope-aware startup prompts, explicit autopilot activation, scoped completion signals and idempotent notification acknowledgement.
+
+Native termination acknowledgement is supplied by the coordinating App session, not independently attested by Python. Long-running unattended App operation and a real remote-CI revision round remain validation goals.
+
 ## 0.2.0a1 — 2026-10-30
 
 Desktop-first autonomous contribution: configure once, automatically select issues, create a fresh native repair chat, independently verify and publish, and follow feedback.

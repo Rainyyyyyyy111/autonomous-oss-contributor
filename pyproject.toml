@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autonomous-oss-contributor"
-version = "0.2.0a1"
+version = "0.3.0a1"
 description = "Evidence-driven, isolated OSS contributions with Codex and GitHub CLI"
 readme = "README.md"
 license = "MIT"

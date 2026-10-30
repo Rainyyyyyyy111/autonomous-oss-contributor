@@ -71,6 +71,17 @@ def main():
             cwd=work, check=True, stdout=subprocess.DEVNULL,
         )
         assert (work / "skills/oss-contributor/SKILL.md").is_file()
+        original_config = json.loads((work / "skills/oss-contributor/installation.json").read_text())["config"]
+        subprocess.run(
+            [str(cli), "desktop", "install-skill", "--upgrade", "--directory", str(work / "skills")],
+            cwd=work, check=True, stdout=subprocess.DEVNULL,
+        )
+        installed = json.loads((work / "skills/oss-contributor/installation.json").read_text())
+        assert installed["config"] == original_config
+        assert Path(installed["config"]).resolve() == config.resolve()
+        health = subprocess.run([str(cli), "desktop", "status", "-c", str(config)],
+                                cwd=work, check=True, text=True, capture_output=True)
+        assert json.loads(health.stdout)["reason"] == "empty allowlist"
     print("Fresh wheel install, CLI, empty state, license and runtime resources: passed")
 
 

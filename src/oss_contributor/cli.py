@@ -228,6 +228,17 @@ def desktop_tick(config: ConfigOption = None, monitor_only: bool = typer.Option(
     native_call(config, "tick", monitor_only=monitor_only)
 
 
+@desktop_app.command("status")
+def desktop_status(config: ConfigOption = None):
+    """Read local scope, leases, budgets and blockers without network or model calls."""
+    cfg = load(config)
+    store = Store(cfg)
+    try:
+        emit(Desktop(Engine(cfg, store)).status())
+    finally:
+        store.close()
+
+
 @desktop_app.command("attach")
 def desktop_attach(ticket: str, thread_id: str, config: ConfigOption = None):
     """Bind a persisted dispatch to the native chat returned by the App."""
@@ -246,6 +257,14 @@ def desktop_checkpoint(ticket: str, cursor: str, config: ConfigOption = None):
     native_call(config, "checkpoint", ticket, cursor)
 
 
+@desktop_app.command("stopped")
+def desktop_stopped(ticket: str, config: ConfigOption = None,
+                    thread_id: Annotated[str | None, typer.Option("--thread-id")] = None,
+                    not_created: bool = typer.Option(False, "--not-created")):
+    """Record a native wait's terminal result, or confirmed absence after creation reconciliation."""
+    native_call(config, "confirm_stopped", ticket, thread_id, not_created)
+
+
 @desktop_app.command("fail")
 def desktop_fail(ticket: str, reason: str, config: ConfigOption = None, quota: bool = typer.Option(False, "--quota")):
     """Record a stopped/failed native chat; never silently retry or switch auth."""
@@ -255,29 +274,40 @@ def desktop_fail(ticket: str, reason: str, config: ConfigOption = None, quota: b
 @desktop_app.command("ack")
 def desktop_ack(ids: list[int], config: ConfigOption = None):
     """Acknowledge notifications after delivery; duplicates remain quiet across restarts."""
-    store = Store(load(config))
-    try:
-        with store.lock():
-            store.acknowledge(ids)
-            emit({"acknowledged": ids})
-    finally:
-        store.close()
+    native_call(config, "acknowledge", ids)
+
+
+@desktop_app.command("scope")
+def desktop_scope(config: ConfigOption = None,
+                  monitor: bool = typer.Option(False, "--monitor"),
+                  autopilot: bool = typer.Option(False, "--autopilot"),
+                  task_ids: Annotated[list[int] | None, typer.Option("--task-id")] = None):
+    """Persist full authorized autopilot or a fixed set of existing PR tasks."""
+    if monitor == autopilot:
+        raise typer.BadParameter("choose exactly one of --monitor or --autopilot")
+    native_call(config, "bind_scope", monitor, task_ids)
 
 
 @desktop_app.command("setup")
 def desktop_setup(config: ConfigOption = None):
     """Print the one-time App startup instruction, not a shell daemon or fake desktop API."""
     cfg = load(config)
+    store = Store(cfg)
+    try:
+        scope = Desktop(Engine(cfg, store)).scope()
+    finally:
+        store.close()
     emit({"config": str((config or config_path()).resolve()), "allowlisted_repositories": len(cfg.repositories),
-          "heartbeat_minutes": 10, "prompt": heartbeat_prompt(config or config_path()),
+          "scope": scope, "heartbeat_minutes": 10, "prompt": heartbeat_prompt(config or config_path(), scope),
           "required_app_tools": ["list_projects", "create_thread", "wait_threads", "list_threads", "automation_update"]})
 
 
 @desktop_app.command("install-skill")
-def desktop_install_skill(config: ConfigOption = None, directory: Annotated[Path | None, typer.Option("--directory")] = None):
+def desktop_install_skill(config: ConfigOption = None, directory: Annotated[Path | None, typer.Option("--directory")] = None,
+                          upgrade: bool = typer.Option(False, "--upgrade")):
     """Install the bundled App coordinator skill, preserving any existing installation."""
     destination = directory or Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "skills"
-    target = install_skill(destination, config or config_path())
+    target = install_skill(destination, config, upgrade=upgrade)
     emit({"skill": str(target), "start": "Use $oss-contributor to start automatic discovery, repair and publication inside my configured allowlist. Create a new native chat for each repair/revision."})
 
 

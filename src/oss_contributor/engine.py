@@ -15,8 +15,17 @@ from .safety import check_regression, eligibility, validate_changes
 from .sandbox import DockerSandbox
 from .store import Store
 
-OPEN = ("open", "revising", "publishing", "validated", "needs_attention", "stopped",
-        "desktop_pending", "desktop_running", "desktop_validating")
+OPEN = (
+    "open",
+    "revising",
+    "publishing",
+    "validated",
+    "needs_attention",
+    "stopped",
+    "desktop_pending",
+    "desktop_running",
+    "desktop_validating",
+)
 
 
 def merged(base: dict[str, str], changes: dict[str, str | None]) -> dict[str, str]:
@@ -137,6 +146,18 @@ class Engine:
         if self.store.meta("paused"):
             raise ContributorError("worker is paused")
 
+    def ensure_task_scope(self, task: dict):
+        scope = json.loads(self.store.meta("desktop_scope", '{"mode":"autopilot","targets":[]}'))
+        if scope["mode"] == "monitor":
+            identity = {
+                "task": task["id"],
+                "repo": task["repo"],
+                "issue": task["issue"],
+                "pr": (task["data"].get("pr") or {}).get("number"),
+            }
+            if identity not in scope["targets"]:
+                raise PublicationConflict("task is outside the persisted monitor scope")
+
     def baseline(self, sandbox, repo: Repository, report: ValidationReport):
         report.commands.extend(sandbox.install())
         snapshot = sandbox.snapshot()
@@ -199,6 +220,7 @@ class Engine:
             self._process(task, revision_events, deadline)
 
     def _process(self, task: dict, revision_events: list | None, deadline: float):
+        self.ensure_task_scope(task)
         task_id, name, number = task["id"], task["repo"], task["issue"]
         repo = self.config.repository(name)
         if repo is None:
@@ -390,6 +412,7 @@ class Engine:
 
     def _publish(self, task: dict, deadline: float):
         self.ensure_unpaused()
+        self.ensure_task_scope(task)
         repo = self.config.repository(task["repo"])
         if repo is None:
             raise PublicationConflict("publication denied: repository removed from allowlist")
@@ -475,14 +498,24 @@ class Engine:
         self.store.update(task_id, "open", pr=result, reason="", waiting="")
         self.store.mark_seen(task_id, data.get("pending_events", []))
 
-    def recover(self):
+    def recover(self, task_ids: set[int] | None = None):
+        if task_ids is None:
+            scope = json.loads(
+                self.store.meta("desktop_scope", '{"mode":"autopilot","targets":[]}')
+            )
+            if scope["mode"] == "monitor":
+                task_ids = {target["task"] for target in scope["targets"]}
         for task in self.store.tasks(("running", "revising")):
+            if task_ids is not None and task["id"] not in task_ids:
+                continue
             self.store.update(
                 task["id"],
                 "needs_attention" if task["data"].get("pr") else "failed",
                 reason="interrupted before independent verification; not automatically retried",
             )
         for task in self.store.tasks(("publishing", "validated")):
+            if task_ids is not None and task["id"] not in task_ids:
+                continue
             if self.store.meta("paused"):
                 return
             if time.time() < task["data"].get("next_reconcile", 0):
@@ -498,7 +531,14 @@ class Engine:
                 self.store.update(task["id"], reason=str(exc), next_reconcile=time.time() + 600)
 
     def watch(self):
+        scope = json.loads(self.store.meta("desktop_scope", '{"mode":"autopilot","targets":[]}'))
+        allowed = (
+            {target["task"] for target in scope["targets"]} if scope["mode"] == "monitor" else None
+        )
         for task in self.store.tasks(("open", "needs_attention", "stopped")):
+            if allowed is not None and task["id"] not in allowed:
+                continue
+            self.ensure_task_scope(task)
             pr = task["data"].get("pr")
             if not pr:
                 continue
@@ -525,6 +565,11 @@ class Engine:
 
     def once(self):
         if self.store.meta("paused"):
+            return
+        if (
+            json.loads(self.store.meta("desktop_scope", '{"mode":"autopilot"}'))["mode"]
+            == "monitor"
+        ):
             return
         # An asynchronous native repair holds the serial model slot across CLI calls.
         if self.store.desktop_jobs():

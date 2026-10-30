@@ -32,10 +32,14 @@ Rejected candidates included already-fixed or claimed issues, duplicate ready fi
 
 ## Known blockers before Beta
 
-1. Exercise the packaged 0.2 desktop scheduler over a long-running native App cycle, including a coordinator restart; the three earlier real contributions used session-specific coordination. Fixture coverage does not prove App uptime or native chat creation/cancellation behavior under every failure.
+1. Exercise the packaged desktop scheduler over a long-running native App cycle, including a coordinator restart; the three earlier real contributions used session-specific coordination. Fixture coverage does not prove App uptime or native chat creation/cancellation behavior under every failure.
 2. The optional standalone adapter still needs a reproducible live model run. In the development account, handshake worked but model turns returned `model_not_found`; this does not block the native desktop path. No authentication fallback was attempted.
 3. Validate revision cycles against a controlled repository with readable failing current-head CI and actionable review. Existing coverage of those paths is simulated; the submitted upstream PRs had no actionable review yet.
 4. Improve contribution-policy/ownership evidence beyond conservative text heuristics and document more supported project environments.
 5. Obtain independent review of the security boundary, generated-test relevance and adversarial harness limitations.
 
 Use this Alpha for exploration with repositories you control and deliberate, low-volume contributions. It is not a production unattended contributor or a guarantee of valid/accepted PRs.
+
+## 0.3 recovery coverage
+
+Regression cases cover frozen monitor identities, foreign task/publication/chat/notification exclusion, explicit scope changes, terminal acknowledgement before handoff collection, cancellation across pause/restart, legacy lease accounting, late creation reconciliation, read-only health, and managed skill upgrade/configuration/link/customization/interruption behavior. Fixture termination acknowledgements simulate App observations; they do not independently prove native process termination or unattended longevity.

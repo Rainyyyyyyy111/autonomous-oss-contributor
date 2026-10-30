@@ -4,7 +4,7 @@
 
 Configure once. The agent discovers Python projects, selects suitable bugs, starts a fresh Codex chat for each repair, independently verifies patches in Docker, submits PRs, and follows CI/review within your allowlist and budgets. Users do not pick each issue or relay the workflow.
 
-**Experimental Alpha — `0.2.0a1`.** Native Codex App chat coordination is the primary path: an installable skill + heartbeat drive a durable Python controller with job leases, restart recovery, strict handoffs and automatic verification/publication. Three real upstream PRs previously used desktop repair chats with independent coordinating review. The packaged scheduler has fixture/adapter and Docker coverage; unattended longevity and a real remote-CI revision round remain unverified. See [validation scope](docs/validation.md).
+**Experimental Alpha — `0.3.0a1`.** Native Codex App chat coordination is the primary path: an installable skill + heartbeat drive a durable Python controller with job leases, confirmed termination, persisted execution scope, restart recovery, strict handoffs and automatic verification/publication. Three real upstream PRs previously used desktop repair chats with independent coordinating review. The packaged scheduler has fixture/adapter and Docker coverage; unattended longevity and a real remote-CI revision round remain unverified. See [validation scope](docs/validation.md).
 
 The optional standalone App Server backend remains available; live model turns returned `model_not_found` in the development account. That backend is not required by the desktop autopilot.
 
@@ -94,6 +94,17 @@ uv run oss-contributor resume
 [Desktop autopilot and recovery](docs/desktop-workflow.md) documents the packaged `desktop tick/attach/checkpoint/finish` interfaces. Native tools come from the App session; this is not a standalone public desktop API. The App and machine must stay running/awake.
 
 For the optional standalone adapter, first verify accessible model execution and a complete run on your own repository, then use `run --once` or `run --daemon`. A root-level `model = "your-available-model"` selects an available model. `doctor --probe-codex` checks protocol only, not model access. No authentication fallback is attempted.
+
+## Runtime scope and upgrades
+
+The primary autopilot automatically chooses issues inside the repository allowlist. `desktop scope --autopilot` activates that runtime scope when the operator asks to start it. For follow-up limited to existing PRs, `desktop scope --monitor --task-id 1 --task-id 2` freezes their repository/issue/PR identities. A fixed monitor cannot discover or publish another task even if a heartbeat omits `--monitor-only`; new database rows do not extend its scope. Scope changes require all native chats to be stopped and settled.
+
+```sh
+uv run oss-contributor desktop status # Local health, budgets and blockers; no remote/model calls.
+uv run oss-contributor desktop install-skill --upgrade
+```
+
+A managed skill upgrade preserves its configured path and extra operator files, refuses customized vendor resources or links, and can resume after interruption. Native failures/timeouts keep the serial slot until App wait confirms termination and the coordinator records `desktop stopped`. Clearing pause cannot release an unconfirmed chat. These coordinator commands run automatically through the skill; users do not repeat them per issue.
 
 ## Limits and recovery
 

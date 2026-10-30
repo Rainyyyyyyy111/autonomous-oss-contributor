@@ -6,18 +6,21 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import stat
 import sys
 import time
 import uuid
 from contextlib import nullcontext
+from datetime import datetime, timedelta
+from datetime import time as daytime
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import Field, ValidationError
 
 from .engine import Engine, merged
+from .installation import install_skill as install_skill
 from .models import Assessment, Repair, StrictModel
 from .process import ContributorError, PublicationConflict, RateLimited
 from .safety import MAX_ARCHIVE, eligibility, validate_changes
@@ -44,8 +47,151 @@ class Desktop:
     def __init__(self, engine: Engine):
         self.engine, self.store, self.config = engine, engine.store, engine.config
 
+    def scope(self) -> dict:
+        return json.loads(self.store.meta("desktop_scope", '{"mode":"autopilot","targets":[]}'))
+
+    def scoped_ids(self) -> set[int] | None:
+        scope = self.scope()
+        return (
+            {target["task"] for target in scope["targets"]} if scope["mode"] == "monitor" else None
+        )
+
+    def ensure_scope(self, task: dict):
+        self.engine.ensure_task_scope(task)
+
+    def scoped_tasks(self, statuses: tuple[str, ...]) -> list[dict]:
+        allowed = self.scoped_ids()
+        tasks = [
+            task for task in self.store.tasks(statuses) if allowed is None or task["id"] in allowed
+        ]
+        for task in tasks:
+            self.ensure_scope(task)
+        return tasks
+
+    def job(self, ticket: str) -> dict:
+        job = self.store.desktop_job(ticket)
+        self.ensure_scope(self.store.get(job["task"]))
+        return job
+
+    def bind_scope(self, monitor: bool, task_ids: list[int] | None = None) -> dict:
+        if self.store.desktop_jobs():
+            raise ContributorError("stop and settle active native jobs before changing scope")
+        if not monitor and task_ids:
+            raise ContributorError("task IDs require monitor scope")
+        if monitor and not task_ids:
+            raise ContributorError("monitor scope requires an explicit nonempty task list")
+        targets = []
+        for ident in sorted(set(task_ids or [])):
+            task = self.store.get(ident)
+            if not task["data"].get("pr"):
+                raise ContributorError("monitor scope only accepts existing PR tasks")
+            targets.append(
+                {
+                    "task": ident,
+                    "repo": task["repo"],
+                    "issue": task["issue"],
+                    "pr": task["data"]["pr"]["number"],
+                }
+            )
+        scope = {"mode": "monitor" if monitor else "autopilot", "targets": targets}
+        self.store.set_meta("desktop_scope", json.dumps(scope))
+        return {"scope": scope}
+
+    def acknowledge(self, ids: list[int]) -> dict:
+        allowed = self.scoped_ids()
+        visible = {
+            notice["id"]
+            for notice in self.store.notifications(include_acknowledged=True)
+            if allowed is None or notice.get("task") is None or notice["task"] in allowed
+        }
+        if not set(ids) <= visible:
+            raise ContributorError("notification is unknown or outside this scope")
+        self.store.acknowledge(ids)
+        return {"acknowledged": ids}
+
     def result(self, action: str = "wait", **data) -> dict:
-        return {"action": action, **data, "notifications": self.store.notifications()}
+        allowed = self.scoped_ids()
+        notices = [
+            notice
+            for notice in self.store.notifications()
+            if allowed is None or notice.get("task") is None or notice["task"] in allowed
+        ]
+        terminal = False
+        if allowed is not None:
+            try:
+                selected = [self.store.get(ident) for ident in allowed]
+                for task in selected:
+                    self.ensure_scope(task)
+                terminal = all(
+                    task["status"] in {"closed", "merged", "stopped"} for task in selected
+                ) and not any(job["task"] in allowed for job in self.store.desktop_jobs())
+            except ContributorError:
+                terminal = False
+        return {"action": action, **data, "scope_complete": terminal, "notifications": notices}
+
+    def status(self) -> dict:
+        """Read-only local health: no GitHub, model, discovery or publication calls."""
+        now = time.time()
+        allowed = self.scoped_ids()
+        jobs = [
+            job for job in self.store.desktop_jobs() if allowed is None or job["task"] in allowed
+        ]
+        usage = self.store.usage()
+        limits = self.config.limits
+        paused = self.store.meta("paused")
+        retry = float(self.store.meta("github_retry_after", "0"))
+        reason = "ready"
+        if paused:
+            reason = paused
+        elif jobs:
+            reason = (
+                "awaiting confirmed native stop"
+                if jobs[0]["state"] == "cancelling"
+                else "native job active"
+            )
+        elif retry > now:
+            reason = "GitHub server-requested backoff"
+        elif allowed is not None:
+            reason = "fixed PR monitor; new issue discovery disabled"
+        elif not self.config.repositories:
+            reason = "empty allowlist"
+        elif usage["publications"] >= limits.prs_per_day:
+            reason = "daily publication budget exhausted"
+        elif usage["model_seconds"] >= limits.model_seconds_per_day:
+            reason = "daily model budget exhausted"
+        elif usage["attempts"] >= limits.attempts_per_day:
+            reason = "daily issue attempt budget exhausted"
+        elif len(self.engine.active()) >= limits.open_prs:
+            reason = "global open PR limit reached"
+        zone = ZoneInfo(self.config.timezone)
+        reset = datetime.combine(
+            datetime.now(zone).date() + timedelta(days=1), daytime.min, tzinfo=zone
+        )
+        return {
+            "scope": self.scope(),
+            "paused": paused,
+            "reason": reason,
+            "usage": usage,
+            "budget_remaining": {
+                "attempts": max(0, limits.attempts_per_day - usage["attempts"]),
+                "publications": max(0, limits.prs_per_day - usage["publications"]),
+                "model_seconds": max(0, limits.model_seconds_per_day - usage["model_seconds"]),
+            },
+            "budget_resets_at": reset.isoformat(),
+            "retry_after": retry if retry > now else None,
+            "active_jobs": [
+                {
+                    "ticket": job["ticket"],
+                    "task": job["task"],
+                    "state": job["state"],
+                    "thread_id": job["data"].get("thread_id"),
+                    "expires": job["expires"],
+                    "remaining_seconds": max(0, job["expires"] - now),
+                }
+                for job in jobs
+            ],
+            "notifications": self.result()["notifications"],
+        }
 
     def settle(self, job: dict, state: str):
         with self.store.db:
@@ -64,9 +210,14 @@ class Desktop:
             )
 
     def fail(self, ticket: str, reason: str, quota: bool = False) -> dict:
-        job = self.store.desktop_job(ticket)
+        job = self.job(ticket)
         if job["state"] in {"complete", "failed"}:
             return self.result(reason="job already settled")
+        if not job["data"].get("thread_stopped"):
+            job["state"] = "cancelling"
+            job["data"].update(stop_reason=reason, quota_blocked=quota)
+            self.store.save_desktop_job(job)
+            return self.cancellation(job)
         self.settle(job, "failed")
         task = self.store.get(job["task"])
         terminal = task["status"] in {"closed", "merged", "stopped"}
@@ -77,10 +228,47 @@ class Desktop:
         )
         if quota:
             self.store.set_meta("paused", "native Codex quota exhausted")
-        self.store.notify(
-            f"job:{ticket}:failed", kind="needs_attention", task=task["id"], reason=reason
-        )
+        if not terminal:
+            self.store.notify(
+                f"job:{ticket}:failed", kind="needs_attention", task=task["id"], reason=reason
+            )
         return self.result(reason=reason)
+
+    def cancellation(self, job: dict) -> dict:
+        return self.result(
+            "cancel",
+            ticket=job["ticket"],
+            thread_id=job["data"].get("thread_id"),
+            host_id=job["data"].get("host_id", "local"),
+            reason=job["data"].get("stop_reason", "stop requested"),
+        )
+
+    def confirm_stopped(
+        self, ticket: str, thread_id: str | None = None, not_created: bool = False
+    ) -> dict:
+        job = self.job(ticket)
+        assigned = job["data"].get("thread_id")
+        if assigned:
+            if not_created or thread_id != assigned:
+                raise ContributorError("stop confirmation must identify the assigned native chat")
+        elif not (
+            not_created
+            and thread_id is None
+            and (job["state"] == "cancelling" or job["data"].get("thread_stopped"))
+        ):
+            raise ContributorError(
+                "reconcile pending chat creation before confirming no chat exists"
+            )
+        if job["state"] in {"complete", "failed"}:
+            return self.result(reason="job already settled")
+        job["data"]["thread_stopped"] = True
+        job["data"]["stopped_at"] = time.time()
+        self.store.save_desktop_job(job)
+        if job["state"] == "cancelling":
+            return self.fail(
+                ticket, job["data"]["stop_reason"], quota=job["data"].get("quota_blocked", False)
+            )
+        return self.result(reason="native chat termination recorded; handoff may be collected")
 
     def _active(self) -> dict | None:
         jobs = self.store.desktop_jobs()
@@ -89,17 +277,25 @@ class Desktop:
         if not jobs:
             return None
         job = jobs[0]
+        self.ensure_scope(self.store.get(job["task"]))
+        if job["state"] == "failed":
+            job["state"] = "cancelling"
+            job["data"]["stop_reason"] = (
+                "legacy failure has no persisted native termination confirmation"
+            )
+            self.store.save_desktop_job(job)
+        if job["state"] == "cancelling":
+            return job
         if time.time() >= job["expires"]:
             self.fail(
                 job["ticket"], "native job deadline expired; do not create a replacement chat"
             )
-            self.store.set_meta(
-                "paused", "native job expired; confirm its chat stopped before resume"
-            )
-            return None
+            pending = self.job(job["ticket"])
+            return pending if pending["state"] == "cancelling" else None
         if job["state"] == "validating":
             self.fail(job["ticket"], "verification interrupted; saved handoff needs attention")
-            return None
+            pending = self.job(job["ticket"])
+            return pending if pending["state"] == "cancelling" else None
         return job
 
     def _observation(self, task: dict):
@@ -169,28 +365,26 @@ class Desktop:
         return actionable
 
     def tick(self, monitor_only: bool = False) -> dict:
-        if self.store.meta("paused"):
-            return self.result(reason=self.store.meta("paused"))
-        if time.time() < float(self.store.meta("github_retry_after", "0")):
-            return self.result(reason="GitHub server-requested backoff")
         try:
             active = self._active()
+            if active and active["state"] == "cancelling":
+                return self.cancellation(active)
+            if self.store.meta("paused"):
+                return self.result(reason=self.store.meta("paused"))
+            if time.time() < float(self.store.meta("github_retry_after", "0")):
+                return self.result(reason="GitHub server-requested backoff")
             if active:
                 if active["data"]["revision"]:
                     self._observation(self.store.get(active["task"]))
                     current = self.store.get(active["task"])
                     if current["status"] in {"closed", "merged", "stopped", "needs_attention"}:
-                        return self.result(
-                            "cancel",
-                            ticket=active["ticket"],
-                            thread_id=active["data"].get("thread_id"),
-                            host_id="local",
-                            reason=current["data"].get("reason", "PR no longer eligible"),
+                        return self.fail(
+                            active["ticket"], current["data"].get("reason", "PR no longer eligible")
                         )
                 return self.job_result(active)
             if self.store.meta("paused"):
                 return self.result(reason=self.store.meta("paused"))
-            for orphan in self.store.tasks(
+            for orphan in self.scoped_tasks(
                 ("desktop_pending", "desktop_running", "desktop_validating")
             ):
                 self.store.update(
@@ -205,8 +399,8 @@ class Desktop:
                     reason="interrupted native task",
                 )
             # Only reconcile artifacts already independently verified; never call Engine.watch/once.
-            recovering = self.store.tasks(("validated", "publishing"))
-            self.engine.recover()
+            recovering = self.scoped_tasks(("validated", "publishing"))
+            self.engine.recover(task_ids=self.scoped_ids())
             for prior in recovering:
                 current = self.store.get(prior["id"])
                 if current["status"] == "open" and current["data"].get("desktop_ticket"):
@@ -217,7 +411,7 @@ class Desktop:
                 >= self.config.discovery.watch_seconds
             ):
                 revision = None
-                for task in self.store.tasks(("open", "needs_attention", "stopped")):
+                for task in self.scoped_tasks(("open", "needs_attention", "stopped")):
                     if not task["data"].get("pr"):
                         continue
                     events = self._observation(task)
@@ -229,7 +423,7 @@ class Desktop:
                     job = self.dispatch(task, events)
                     if job:
                         return self.job_result(job)
-            if monitor_only:
+            if monitor_only or self.scoped_ids() is not None:
                 return self.result(reason="existing PRs observed; discovery disabled for this run")
             if not self.config.repositories:
                 return self.result(reason="empty allowlist; configure authorized repositories once")
@@ -265,6 +459,7 @@ class Desktop:
 
     def dispatch(self, task: dict, events: list | None = None) -> dict | None:
         self.engine.ensure_unpaused()
+        self.ensure_scope(task)
         if self.store.desktop_jobs():
             raise ContributorError("a native chat is already active")
         repo = self.config.repository(task["repo"])
@@ -443,7 +638,7 @@ class Desktop:
         )
 
     def checkpoint(self, ticket: str, cursor: str) -> dict:
-        job = self.store.desktop_job(ticket)
+        job = self.job(ticket)
         if job["state"] != "attached" or not cursor or len(cursor) > 500:
             raise ContributorError("cursor requires an attached native chat")
         job["data"]["cursor"] = cursor
@@ -451,10 +646,12 @@ class Desktop:
         return self.result(reason="cursor saved")
 
     def attach(self, ticket: str, thread_id: str, host_id: str = "local") -> dict:
-        self.engine.ensure_unpaused()
-        job = self.store.desktop_job(ticket)
-        if job["state"] not in {"dispatching", "attached"} or time.time() >= job["expires"]:
-            raise ContributorError("native job is not attachable")
+        job = self.job(ticket)
+        cancelling = job["state"] == "cancelling"
+        if not cancelling:
+            self.engine.ensure_unpaused()
+            if job["state"] not in {"dispatching", "attached"} or time.time() >= job["expires"]:
+                raise ContributorError("native job is not attachable")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", thread_id) or host_id != "local":
             raise ContributorError("a local native chat ID is required")
         if job["data"].get("thread_id") not in {None, thread_id}:
@@ -465,14 +662,16 @@ class Desktop:
         ):
             raise ContributorError("each repair or revision requires a fresh native chat")
         job["data"].update(thread_id=thread_id, host_id=host_id)
-        job["state"] = "attached"
+        job["state"] = "cancelling" if cancelling else "attached"
         self.store.save_desktop_job(job)
-        self.store.update(job["task"], "desktop_running", desktop_thread=thread_id)
-        return self.job_result(job)
+        self.store.update(
+            job["task"], None if cancelling else "desktop_running", desktop_thread=thread_id
+        )
+        return self.cancellation(job) if cancelling else self.job_result(job)
 
     def finish(self, ticket: str, path: Path) -> dict:
         self.engine.ensure_unpaused()
-        job = self.store.desktop_job(ticket)
+        job = self.job(ticket)
         expected = self.store.home / "jobs" / ticket / "handoff.json"
         if path.is_symlink() or path.resolve() != expected.resolve():
             raise ContributorError("handoff must be the controller-assigned artifact path")
@@ -490,6 +689,8 @@ class Desktop:
             return self.result(reason="handoff already completed", task_id=job["task"])
         if job["state"] != "attached" or time.time() >= job["expires"]:
             raise ContributorError("handoff requires a live attached native chat")
+        if not job["data"].get("thread_stopped"):
+            raise ContributorError("confirm native chat termination before collecting its handoff")
         try:
             handoff = Handoff.model_validate_json(raw)
         except ValidationError:
@@ -633,28 +834,16 @@ class Desktop:
             return self.fail(ticket, str(exc))
 
 
-def install_skill(destination: Path, config: Path) -> Path:
-    source = Path(__file__).parent / "skills" / "oss-contributor"
-    target = destination.expanduser().resolve() / "oss-contributor"
-    if target.exists():
-        raise ContributorError(f"skill already exists: {target}; inspect it before replacing")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, target)
-    (target / "installation.json").write_text(
-        json.dumps(
-            {"python": sys.executable, "config": str(config.expanduser().resolve())}, indent=2
-        )
-    )
-    return target
-
-
-def heartbeat_prompt(config: Path) -> str:
+def heartbeat_prompt(config: Path, scope: dict | None = None) -> str:
+    intro = "The operator authorizes automatic issue selection and publication only inside this configured allowlist and budgets. "
+    if scope and scope["mode"] == "monitor":
+        intro = f"Use monitor-only operation for the persisted fixed PR task IDs {[target['task'] for target in scope['targets']]}; do not discover issues, create new PRs or expand the scope. "
     return (
         f"Use $oss-contributor to run the autonomous OSS contribution cycle with config {config.resolve()}. "
-        "The operator authorizes automatic issue selection and publication only inside this configured allowlist and budgets. "
-        "Use desktop tick, never standalone CLI run or Engine.watch. Resume any persisted native chat before creating another. "
+        + intro
+        + "Use desktop tick, never standalone CLI run or Engine.watch. Resume any persisted native chat before creating another. "
         "Create one new native local chat per repair/revision only as authorized by the user's start request; "
-        "never choose a model or worktree. Attach it immediately, wait, then independently finish the JSON handoff. "
+        "never choose a model or worktree. Attach it immediately, wait, record native termination with desktop stopped, then independently finish the JSON handoff. "
         "Keep target execution in Docker and preserve all quality gates. No comments, replies, merging or CI approval. "
         "Remain quiet on unchanged/pending states; deliver durable notifications, then acknowledge their IDs. "
         "Pause on account or environment blockers, never switch authentication or widen authorization."

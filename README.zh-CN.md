@@ -4,7 +4,7 @@
 
 **配置一次，让 Agent 自动发现、筛选、修复、验证并提交开源贡献，持续跟进 CI 和维护者反馈。** 正常流程不用你挑 Issue、转发提示词、运行测试或点提交。
 
-`0.2.0a1` 是实验性 Alpha，主路径为 **Codex 桌面技能＋原生 heartbeat＋持久化 Python 控制器**。独立 CLI 的 App Server 模型调用作为备用路径保留，当前开发账号的 `model_not_found` 不再阻挡桌面路径。维护者是否接受、合并，仍由维护者决定。
+`0.3.0a1` 是实验性 Alpha，主路径为 **Codex 桌面技能＋原生 heartbeat＋持久化 Python 控制器**。独立 CLI 的 App Server 模型调用作为备用路径保留，当前开发账号的 `model_not_found` 不再阻挡桌面路径。维护者是否接受、合并，仍由维护者决定。
 
 ## 一次配置，持续运行
 
@@ -70,7 +70,18 @@ uv run oss-contributor pause
 uv run oss-contributor resume
 ```
 
-本地 SQLite 是恢复依据，JSONL 为日志镜像。模型预算派发前预留，结束时幂等结算。超时会暂停，确认旧聊天停止后再恢复；通过验证后的发布中断可以核对远端后继续。配置、数据库、原始日志和认证缓存不应提交到 GitHub。
+本地 SQLite 是恢复依据，JSONL 为日志镜像。模型预算派发前预留，结束时幂等结算。超时或故障后保留执行位，协调聊天确认原聊天停止后才结算；仅执行恢复命令无法绕过停止确认。通过验证后的发布中断可以核对远端后继续。配置、数据库、原始日志和认证缓存不应提交到 GitHub。
+
+## 运行状态与升级
+
+```sh
+uv run oss-contributor desktop status
+uv run oss-contributor desktop install-skill --upgrade
+```
+
+状态查询完全本地，不访问 GitHub 或调用模型，可查看剩余额度、重置时间、暂停原因和待确认停止的聊天。技能升级保留已有配置路径和额外文件；检测到本地修改或链接路径会拒绝覆盖，中断后可继续。
+
+主模式仍是自动选 Issue。固定 PR 跟进则用 `desktop scope --monitor --task-id 1 --task-id 2` 一次性冻结仓库/Issue/PR 身份，后续即使漏传监控参数也不会扩权。`desktop scope --autopilot` 仅在用户要求启动完整自动贡献时切换，且不能绕过活动聊天。技能会自动执行这些协调命令，不要求用户逐个 Issue 操作。
 
 ## 隔离与现实限制
 
@@ -78,7 +89,7 @@ uv run oss-contributor resume
 
 **桌面聊天本身仍有宿主机工具权限。** 要求它使用 Docker 是工作流约束，不等于移除了宿主机能力。Docker 及测试证据也不能形式化证明任意恶意仓库或补丁安全。详细边界见 [SECURITY.md](SECURITY.md)。
 
-机器和 App 必须保持运行、唤醒。0.2 已提供可安装技能、持久调度、统一交接和恢复测试；长期无人值守运行，以及一次真实远端 CI 失败后的完整修订，仍需实测，不能用模拟测试代替。独立 `run --daemon` 仍调用备用 App Server 路径，不是桌面自动化入口。
+机器和 App 必须保持运行、唤醒。0.3 已提供可安装技能、持久调度、统一交接和恢复测试；长期无人值守运行，以及一次真实远端 CI 失败后的完整修订，仍需实测，不能用模拟测试代替。独立 `run --daemon` 仍调用备用 App Server 路径，不是桌面自动化入口。
 
 ## 已有真实贡献记录
 
