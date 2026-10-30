@@ -60,6 +60,47 @@ def test_pause_guard_runs_before_each_github_mutation(monkeypatch):
         gh.api("repos/o/r/pulls", method="POST", data={"title": "never posted"})
 
 
+def test_description_update_only_patches_body_and_is_idempotent():
+    client = GitHub()
+    raw = {"state": "open", "head": {"sha": "a" * 40}, "body": "old"}
+    writes = []
+
+    def api(endpoint, *, method="GET", data=None):
+        assert endpoint == "repos/o/r/pulls/1"
+        if method != "GET":
+            assert method == "PATCH" and data == {"body": "new"}
+            writes.append(data)
+            raw.update(data)
+        return raw
+
+    client.api = api
+    client.update_pr_body("o/r", 1, "new", "a" * 40, "old")
+    client.update_pr_body("o/r", 1, "new", "a" * 40, "old")
+    assert writes == [{"body": "new"}]
+
+
+@pytest.mark.parametrize("changed", ["closed", "merged", "head", "body"])
+def test_description_update_refuses_intervening_changes(changed):
+    client = GitHub()
+    raw = {"state": "open", "head": {"sha": "a" * 40}, "body": "old"}
+    if changed == "closed":
+        raw["state"] = "closed"
+    elif changed == "merged":
+        raw["merged_at"] = "2026-10-30T10:00:00Z"
+    elif changed == "head":
+        raw["head"] = {"sha": "b" * 40}
+    else:
+        raw["body"] = "maintainer edit"
+
+    def api(endpoint, *, method="GET", data=None):
+        assert method == "GET"
+        return raw
+
+    client.api = api
+    with pytest.raises(ContributorError):
+        client.update_pr_body("o/r", 1, "new", "a" * 40, "old")
+
+
 def check_adapter(checks, reviews=None, actions=None):
     client = GitHub()
     calls = []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -51,6 +52,28 @@ class Repair(StrictModel):
     evidence: list[str]
 
 
+ACKNOWLEDGEMENT = re.compile(r"\s*(?:thanks!?|thank you!?|lgtm[.!]?|looks good[.!]?)\s*", re.I)
+
+
+FEEDBACK_GUIDANCE = (
+    "Classify all feedback before editing. Use description only when every request explicitly "
+    "concerns the PR description or its wording, with no code, test or CI work requested. "
+    "Use code for concrete source changes. Broad complaints such as 'AI slop' without a clear "
+    "target are ambiguous: return needs_attention with evidence instead of guessing or making "
+    "cosmetic code changes. Never treat failed CI as description-only feedback. "
+    "For description changes, provide concise, factual Repair summary/root_cause and evidence; "
+    "the controller preserves verification results, issue links, templates and AI disclosure. "
+    "Do not claim new testing or remove AI disclosure to conceal assistance."
+)
+
+
+class FeedbackPlan(StrictModel):
+    action: Literal["code", "description", "needs_attention"]
+    reason: str
+    evidence: list[str]
+    repair: Repair | None = None
+
+
 class ValidationReport(StrictModel):
     base_sha: str
     passed: bool = False
@@ -72,7 +95,15 @@ class PRState(StrictModel):
     url: str
     state: Literal["open", "closed", "merged"]
     head_sha: str
+    body: str = ""
     events: list[ReviewEvent] = []
     waiting: str = ""
     stop: bool = False
     ci: list[dict[str, Any]] = []
+
+
+class NotificationBatch(StrictModel):
+    rows: list[dict[str, Any]] = []
+    last_modified: str = ""
+    poll_interval: int = 60
+    not_modified: bool = False

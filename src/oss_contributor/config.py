@@ -34,6 +34,14 @@ class Discovery(StrictModel):
     watch_seconds: int = Field(600, ge=1)
 
 
+class Notifications(StrictModel):
+    enabled: bool = True
+    desktop_alerts: bool = True
+    poll_seconds: int = Field(60, ge=60, le=3600)
+    lookback_days: int = Field(7, ge=1, le=90)
+    max_pages: int = Field(10, ge=1, le=100)
+
+
 class Repository(StrictModel):
     name: str
     image: str = "oss-contributor-runner:0.1"
@@ -82,6 +90,7 @@ class Config(StrictModel):
     model: str | None = None
     limits: Limits = Field(default_factory=lambda: Limits())
     discovery: Discovery = Field(default_factory=lambda: Discovery())
+    notifications: Notifications = Field(default_factory=lambda: Notifications())
     repositories: list[Repository] = []
 
     @field_validator("timezone")
@@ -124,6 +133,13 @@ max_repositories = 50
 issues_per_repo = 10
 interval_seconds = 3600
 watch_seconds = 600
+
+[notifications]
+enabled = true
+desktop_alerts = true
+poll_seconds = 60
+lookback_days = 7
+max_pages = 10
 
 # [[repositories]]
 # name = "your-account/your-test-repository"

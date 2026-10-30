@@ -25,7 +25,7 @@ def test_end_to_end_real_regression_and_clean_verification(rig):
     assert [r["code"] for r in report["commands"]] == [0, 1, 0, 0]
     assert FixtureSandbox.created == 2
     assert gh.published[0]["changes"]["calc.py"] == FIX
-    assert "prepared automatically" in gh.published[0]["body"]
+    assert "AI-assisted with Codex" in gh.published[0]["body"]
     assert store.usage()["attempts"] == store.usage()["publications"] == 1
 
 

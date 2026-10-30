@@ -13,6 +13,7 @@ from .codex import Codex
 from .config import TEMPLATE, Config, default_home, load_config
 from .desktop import Desktop, heartbeat_prompt, install_skill
 from .engine import Engine
+from .notifications import NotificationWatcher
 from .process import ContributorError, run_command
 from .sandbox import DockerSandbox
 from .store import Store
@@ -20,6 +21,8 @@ from .store import Store
 app = typer.Typer(no_args_is_help=True, help="Evidence-driven autonomous OSS contributions.")
 desktop_app = typer.Typer(no_args_is_help=True, help="Persistent native-chat autopilot; never calls the standalone model adapter.")
 app.add_typer(desktop_app, name="desktop")
+notifications_app = typer.Typer(no_args_is_help=True, help="Scoped GitHub notification ingestion and triage; no publication or model calls.")
+app.add_typer(notifications_app, name="notifications")
 ConfigOption = Annotated[Path | None, typer.Option("--config", "-c")]
 
 
@@ -220,6 +223,68 @@ def native_call(config: Path | None, method: str, *args, **kwargs):
             emit(getattr(Desktop(Engine(cfg, store)), method)(*args, **kwargs))
     finally:
         store.close()
+
+
+@notifications_app.command("poll")
+def notification_poll(
+    config: ConfigOption = None, quiet: bool = typer.Option(False, "--quiet"),
+    desktop_alerts: bool = typer.Option(False, "--desktop-alerts"),
+):
+    """Read notifications once, persist triage and queue reviews for the native coordinator."""
+    store = Store(load(config))
+    try:
+        try:
+            with store.lock():
+                watcher = NotificationWatcher(Desktop(Engine(store.config, store)))
+                result = watcher.poll()
+                if desktop_alerts and result["state"] not in {"disabled", "paused"}:
+                    alert_error = watcher.desktop_alerts()
+                    if alert_error:
+                        result["alert_error"] = alert_error
+        except ContributorError as exc:
+            if str(exc) != "another worker is running":
+                raise
+            result = {"state": "busy", "decisions": []}
+        if not quiet or result.get("decisions") or result.get("alert_error") or result["state"] in {"error", "backoff"}:
+            emit(result)
+    finally:
+        store.close()
+
+
+@notifications_app.command("watch")
+def notification_watch(config: ConfigOption = None):
+    """Run the cheap listener in the foreground; native chats remain owned by the App."""
+    cfg = load(config)
+    try:
+        while True:
+            store = Store(cfg)
+            try:
+                with store.lock():
+                    result = NotificationWatcher(Desktop(Engine(cfg, store))).poll()
+                    if result.get("decisions") or result["state"] == "error":
+                        emit(result)
+            except ContributorError as exc:
+                if str(exc) != "another worker is running":
+                    raise
+            finally:
+                store.close()
+            time.sleep(cfg.notifications.poll_seconds)
+    except KeyboardInterrupt:
+        typer.echo("Notification listener stopped; queued events are preserved.")
+
+
+@notifications_app.command("service")
+def notification_service_command(
+    config: ConfigOption = None,
+    install: bool = typer.Option(False, "--install"),
+    uninstall: bool = typer.Option(False, "--uninstall"),
+):
+    """Install/remove the macOS listener; this never starts native chats or changes PRs."""
+    from .notification_service import notification_service
+
+    if install == uninstall:
+        raise typer.BadParameter("choose exactly one of --install or --uninstall")
+    emit(notification_service(config or config_path(), uninstall))
 
 
 @desktop_app.command("tick")

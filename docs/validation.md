@@ -30,11 +30,57 @@ SCPIpy's first Tests/Build docs runs concluded `action_required`, awaiting maint
 
 Rejected candidates included already-fixed or claimed issues, duplicate ready fixes, unsupported environments and baselines with existing check failures. These three selected examples are not a benchmark denominator or a promise of success on a random issue. The two additional PRs were explicitly requested by the operator; the default daily PR limit remains one.
 
+## Notification follow-up — 2026-10-30 (Asia/Singapore)
+
+The authenticated GitHub notifications API returned three notifications at this inspection. Their live PRs, reviews and associated issues were read; ConfigObj's complete PR timeline, inline review comments and current-head check/Actions endpoints were also checked.
+
+| Notification | Observed outcome | Time on 2026-10-30 (UTC+08:00) |
+| --- | --- | --- |
+| [ConfigObj PR #291](https://github.com/DiffSK/configobj/pull/291), for [issue #94](https://github.com/DiffSK/configobj/issues/94) | Changes requested; closed without merging. Original issue remains open. | Review 17:36:35; PR `closedAt` 17:54:38 |
+| [python-jsonpath-rw PR #104](https://github.com/kennknowles/python-jsonpath-rw/pull/104), for [issue #53](https://github.com/kennknowles/python-jsonpath-rw/issues/53) | Approved and merged; original issue closed. | Merged 15:09:20 |
+| [python-jsonpath-rw PR #105](https://github.com/kennknowles/python-jsonpath-rw/pull/105), for [issue #67](https://github.com/kennknowles/python-jsonpath-rw/issues/67) | Approved and merged; original issue closed. | Merged 17:49:06 |
+
+### ConfigObj #291: maintainer feedback and closure
+
+At 17:36:35, collaborator `jelmer` submitted a [changes-requested review](https://github.com/DiffSK/configobj/pull/291#pullrequestreview-5710468798):
+
+> Please edit AI slop out of the PR before sending our for review
+
+The PR timeline identifies `jelmer` as the actor who closed it at 17:54:39 (one second after the PR object's `closedAt`). `mergedAt` is null, and the submitted head remains `2d2589be1a27dd3462494d9967bb56d3751d785b`. There are no issue-conversation comments or inline review comments on this PR explaining particular offending passages or code lines. The review objects to the submission's quality as perceived by the maintainer; it does not provide a specific technical defect, an explicit blanket ban on AI assistance, or a separate explanation for closure. Closure followed that review, but its precise rationale beyond the review is not documented.
+
+The original bug is the inability to read back `nan` written with `unrepr=True`, because `ast.literal_eval` rejects that name. Issue #94 remains open, so this contribution did not resolve it upstream. Previous independent local evidence remains 79 baseline tests, 16 passing fixed regression cases and 95 passing fixed full-suite tests plus two doctest entry points, on Python 3.12 only. This inspection did not rerun those tests. The current head has zero remote check runs and zero Actions runs; there is no observed CI failure explaining this closure, and no remote CI pass can be claimed.
+
+Potential review-friction sources, inferred from the submitted PR rather than specified by the reviewer, include the long command transcript with insufficient distinction between expected original-code failures and fixed-code results, boilerplate assurances, and the automation-oriented test filename `test_oss_regression_94.py`. These are hypotheses for improving future submissions, not confirmed explanations of the maintainer's objection. Future PRs should summarize the concrete bug, change and meaningful test results briefly, keep full command logs in local evidence, and follow the target repository's test conventions while preserving any required AI disclosure. Passing tests alone do not establish reviewer readiness or acceptance.
+
+The local controller's event mirror already records task 2 as `closed` with reason `maintainer decision recorded`. An intervening revision attempt recorded `PR stopped or Head changed while repair was running`; GitHub still shows the original submitted head. Treat this contribution as closed without merge, not as a successful fix or a pending review. Any future resubmission should first establish whether the maintainer welcomes it and address concrete feedback. This inspection made no upstream edits, comments, pushes or reopening requests, left notification read status unchanged, and did not modify controller state.
+
+## Review-handling repair — 2026-10-30
+
+Investigation found two concrete controller problems: `Engine.body` exposed the full verification command transcript with boilerplate, and both revision paths required new source changes even for feedback solely about the PR description. These are program defects supported by source inspection; they do not establish which material the ConfigObj reviewer meant by their broad complaint.
+
+GitHub's [review guidance](https://docs.github.com/en/pull-requests/concepts/helping-others-review-your-changes) recommends focused PRs with descriptions explaining the problem, approach and result. The [Update a pull request API](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request) accepts a `body` independently of commits. The repair uses those capabilities: a concise generated explanation with an evidence-backed validation summary, and a separate existing-PR description update. Command transcripts remain local and AI assistance remains disclosed.
+
+Native handoffs now accept `description` with no file changes; the standalone path classifies feedback with a read-only model call before source repair. Both reuse the previous verified patch/report, retain revision limits and policy/scope checks, refuse CI feedback in description-only revisions, and persist update intent for retry. Existing code changes still require independent regression/full-suite validation. Ambiguous quality complaints are directed to `needs_attention`, with no assumption that rewriting prose or altering code will satisfy the reviewer. Classification still depends on model/coordinator judgement.
+
+Regression coverage uses trusted local fixtures and simulated GitHub writes for successful/no-op description updates, lost-response recovery, immutable patch/report/head, CI/mixed/new feedback, human description edits, PR closure/stop and ambiguous escalation. GitHub adapter tests verify a body-only PATCH and observed-conflict guards. These checks do not constitute a new live upstream revision or prove atomic exclusion of concurrent GitHub edits; the API exposes no expected-head/body parameter for this operation.
+
+Local verification on Python 3.12.2: `uv run pytest -q` completed with **169 passed, 5 skipped** (optional integration tests); Ruff, mypy, skill validation, wheel/sdist builds and a fresh-wheel installation/CLI/resource smoke check passed. Failed revision attempts now retain the previous accepted validation report and store attempt evidence separately; standalone lost-response recovery is covered. The managed installed skill was upgraded and verified against the source hashes while preserving its existing interpreter/config paths. The configured interpreter imports this editable checkout. No upstream PR was changed to test the repair.
+
+## GitHub notification listener — 2026-10-30
+
+Added a scoped observer with default 60-second polling, GitHub `Last-Modified`/`304` support, server poll-interval and rate-limit handling, bounded pagination, version deduplication, atomic cursor/inbox persistence and periodic PR-state sweeps. Notifications trigger current-state verification rather than direct action based on their reason/title. The observer does not call models or publish; review work is queued for the native coordinator and broad ambiguous quality feedback can be escalated. Native revision acceptance/publication now reject intervening actionable feedback, and an active native revision requests confirmed cancellation before reassessment. Acknowledgements remain ignorable.
+
+The optional macOS LaunchAgent was installed against the operator's existing config, with no scope or heartbeat expansion. A live account poll successfully returned `not_modified`; matched notifications were recorded as already merged. Repeated LaunchAgent runs were observed, including a successful exit after handling controller-lock contention as a normal deferred attempt. Health reported no notification API error and a subsequent successful poll within the configured interval. This is evidence of local installation/account integration, not long-term uptime or a claim that every GitHub event generates a notification. No remote write was used as a test fixture. Local alert submission is separately deduplicated; actual display depends on macOS notification settings.
+
+Validation of the integrated changes: the full suite completed with **207 passed, 5 skipped** (optional integration tests), including all **6 service tests**. Ruff, mypy, bundled-skill validation, wheel/sdist builds and a fresh-wheel installation/CLI/resource smoke check passed. Coverage includes notification scope/identity matching, ignored external URLs, duplicate and read notifications, server intervals/304 validators, pagination rejection, cursor recovery after observation failure, pause/backoff, fallback sweeps, terminal/CI/ambiguous triage, queue priority, late-feedback publication/cancellation guards, alert deduplication and managed service install/removal/rollback.
+
+The machine must be awake for the listener. It may defer for a held controller lock or GitHub throttling; complex model judgement still waits for the native coordinator's heartbeat (default ten minutes) and budgets. See the [listener workflow](desktop-workflow.md#github-notification-listener) and the [GitHub notification API guidance](https://docs.github.com/en/rest/activity/notifications).
+
 ## Known blockers before Beta
 
 1. Exercise the packaged desktop scheduler over a long-running native App cycle, including a coordinator restart; the three earlier real contributions used session-specific coordination. Fixture coverage does not prove App uptime or native chat creation/cancellation behavior under every failure.
 2. The optional standalone adapter still needs a reproducible live model run. In the development account, handshake worked but model turns returned `model_not_found`; this does not block the native desktop path. No authentication fallback was attempted.
-3. Validate revision cycles against a controlled repository with readable failing current-head CI and actionable review. Existing coverage of those paths is simulated; the submitted upstream PRs had no actionable review yet.
+3. Validate revision cycles against a controlled repository with readable failing current-head CI and actionable review. Existing coverage of those paths is simulated; ConfigObj #291 subsequently received broad quality feedback and was closed, which does not establish a completed review-to-revision cycle.
 4. Improve contribution-policy/ownership evidence beyond conservative text heuristics and document more supported project environments.
 5. Obtain independent review of the security boundary, generated-test relevance and adversarial harness limitations.
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add scoped GitHub notification ingestion with conditional polling, server interval/rate-limit handling, atomic feed/inbox persistence, immediate state triage, priority review queue and periodic PR sweeps. The observer never invokes models or publishes.
+- Add foreground notification monitoring, optional macOS LaunchAgent installation/removal and separately deduplicated local alerts; expose listener health in local desktop status.
+- Generate concise PR explanations and validation summaries while retaining command transcripts in local evidence and disclosing Codex assistance.
+- Separate description-only feedback from code revisions in native and standalone workflows. Explicit wording requests can update an existing verified PR body without source changes or another commit; ambiguous feedback can escalate for attention.
+- Persist description-update intent for recovery, guard observed external edits/head changes/closure and new feedback, and reject CI feedback or file changes in description-only handoffs. Source revisions retain independent validation.
+
 ## 0.3.0a1 — 2026-10-30
 
 Automatic operation with enforced runtime scope and confirmed native-chat lifecycle.

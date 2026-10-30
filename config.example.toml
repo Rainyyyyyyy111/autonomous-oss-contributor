@@ -21,6 +21,13 @@ issues_per_repo = 10
 interval_seconds = 3600
 watch_seconds = 600
 
+[notifications]
+enabled = true
+desktop_alerts = true
+poll_seconds = 60
+lookback_days = 7
+max_pages = 10
+
 # [[repositories]]
 # name = "your-account/your-test-repository"
 # image = "oss-contributor-runner:0.1"

@@ -9,11 +9,11 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 from .config import Discovery
-from .models import Issue, PRState, ReviewEvent
+from .models import Issue, NotificationBatch, PRState, ReviewEvent
 from .process import ContributorError, PublicationConflict, RateLimited, run_bytes, run_command
 from .safety import MAX_ARCHIVE, STOP, unpack_archive
 
@@ -34,6 +34,9 @@ class GitHub:
         self.timezone = timezone
         self.deadline: float | None = None
         self.before_write: Callable[[], None] | None = None
+        self.response_headers: dict[str, str] = {}
+        self.response_status: int = 0
+        self.notification_poll_interval: int = 60
 
     @contextmanager
     def bounded(self, deadline: float):
@@ -52,10 +55,15 @@ class GitHub:
             raise ContributorError("GitHub task deadline exceeded")
         return min(maximum, remaining)
 
-    def api(self, endpoint: str, *, method: str = "GET", data: dict | None = None) -> Any:
+    def api(
+        self, endpoint: str, *, method: str = "GET", data: dict | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
         if method != "GET" and endpoint != "graphql" and self.before_write:
             self.before_write()
         argv = ["gh", "api", "--include", "--method", method, endpoint]
+        for key, value in (headers or {}).items():
+            argv += ["--header", f"{key}: {value}"]
         if data is not None:
             argv += ["--input", "-"]
         result = run_command(
@@ -67,6 +75,16 @@ class GitHub:
         # gh --include returns HTTP headers followed by JSON; redirects can add blocks.
         match = list(re.finditer(r"(?m)^\s*[\[{]", result.output))
         header = result.output[: match[0].start()] if match else result.output
+        # Keep only the final HTTP header block (gh may follow a redirect).
+        blocks = re.split(r"(?im)^HTTP/[^\r\n]+", header)
+        self.response_headers = {
+            key.lower(): value.strip()
+            for key, value in re.findall(r"(?m)^([\w-]+):[ \t]*([^\r\n]*)", blocks[-1])
+        }
+        statuses = re.findall(r"(?im)^HTTP/\S+\s+(\d{3})", header)
+        self.response_status = int(statuses[-1]) if statuses else 0
+        if self.response_status == 304:
+            return None
         if result.code:
             if (
                 "rate limit" in result.output.lower()
@@ -95,6 +113,56 @@ class GitHub:
         if self._login is None:
             self._login = self.api("user")["login"]
         return self._login
+
+    def notification_batch(
+        self, since: str, last_modified: str = "", max_pages: int = 10
+    ) -> NotificationBatch:
+        """Read the inbox without changing GitHub read state or following subject URLs."""
+        endpoint = "notifications?" + urlencode({
+            "all": "true", "participating": "false", "since": since, "per_page": 50,
+        })
+        result = NotificationBatch()
+        self.notification_poll_interval = 60
+        visited = set()
+        for page in range(max_pages):
+            if endpoint in visited:
+                raise ContributorError("GitHub notification pagination loop")
+            visited.add(endpoint)
+            rows = self.api(
+                endpoint, headers={"If-Modified-Since": last_modified}
+                if page == 0 and last_modified else None,
+            )
+            interval = self.response_headers.get("x-poll-interval", "60")
+            if not interval.isdigit():
+                raise ContributorError("invalid GitHub notification poll interval")
+            result.poll_interval = max(result.poll_interval, int(interval))
+            self.notification_poll_interval = result.poll_interval
+            if page == 0:
+                result.last_modified = self.response_headers.get("last-modified", "")
+                result.not_modified = self.response_status == 304
+            if result.not_modified:
+                return result
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                raise ContributorError("invalid GitHub notifications response")
+            result.rows.extend(rows)
+            link = self.response_headers.get("link", "")
+            following = re.search(r'<([^>]+)>;\s*rel="next"', link)
+            if not following:
+                return result
+            target = urlparse(following[1])
+            query = parse_qs(target.query)
+            if (
+                target.scheme != "https" or target.netloc != "api.github.com"
+                or target.path != "/notifications" or target.fragment
+                or query.get("since") != [since]
+                or query.get("all") != ["true"]
+                or query.get("participating") != ["false"]
+                or query.get("per_page") != ["50"]
+                or not query.get("page", [""])[0].isdigit()
+            ):
+                raise ContributorError("untrusted GitHub notification pagination URL")
+            endpoint = target.path.lstrip("/") + "?" + target.query
+        raise ContributorError("GitHub notification pagination bound exceeded; cursor unchanged")
 
     def discover(self, options: Discovery) -> list[dict]:
         since = datetime.now(ZoneInfo(self.timezone)).date() - timedelta(days=options.pushed_days)
@@ -349,12 +417,30 @@ class GitHub:
                 url=raw["html_url"],
                 state=state,
                 head_sha=head,
+                body=raw.get("body") or "",
                 events=events,
                 waiting=waiting,
                 stop=stop,
                 ci=ci,
             )
         )
+
+    def update_pr_body(
+        self, repo: str, number: int, body: str, expected_head: str, expected_body: str
+    ):
+        """Edit only the description; refuse observed intervening human edits on retry."""
+        endpoint = f"repos/{repo}/pulls/{number}"
+        raw = self.api(endpoint)
+        if raw["state"] != "open" or raw.get("merged_at"):
+            raise PublicationConflict("PR closed before description update")
+        if raw["head"]["sha"] != expected_head:
+            raise PublicationConflict("PR Head changed before description update")
+        current = raw.get("body") or ""
+        if current == body:
+            return  # A previous PATCH may have succeeded before its response was lost.
+        if current != expected_body:
+            raise PublicationConflict("PR description changed outside this agent")
+        self.api(endpoint, method="PATCH", data={"body": body})
 
     def find_pr(self, repo: str, branch: str) -> dict | None:
         query = urlencode({"state": "all", "head": f"{self.login()}:{branch}", "per_page": 100})

@@ -11,7 +11,16 @@ import pytest
 
 from oss_contributor.config import Config, Repository
 from oss_contributor.engine import Engine
-from oss_contributor.models import Assessment, CommandResult, Issue, PRState, Regression, Repair
+from oss_contributor.models import (
+    Assessment,
+    CommandResult,
+    FeedbackPlan,
+    Issue,
+    NotificationBatch,
+    PRState,
+    Regression,
+    Repair,
+)
 from oss_contributor.process import ContributorError
 from oss_contributor.store import Store
 
@@ -97,6 +106,7 @@ class FakeGitHub:
             body="Calling add(2, 3) returns -1, but it should return 5. Reproducible on main.",
         )
         self.published = []
+        self.description_updates = []
         self.remote = None
         self.state = PRState(
             number=8, url="https://github.com/owner/demo/pull/8", state="open", head_sha="b" * 40
@@ -124,10 +134,25 @@ class FakeGitHub:
         if self.remote is None:
             self.published.append({"changes": changes, "body": body, "branch": branch, "sha": sha})
             self.remote = {"number": 8, "html_url": self.state.url, "state": "open"}
+        self.state.body = body
         return {"number": 8, "url": self.state.url, "head_sha": self.state.head_sha}
+
+    def update_pr_body(self, repo, number, body, expected_head, expected_body):
+        assert self.state.head_sha == expected_head
+        if self.state.body == body:
+            return
+        if self.state.body != expected_body:
+            from oss_contributor.process import PublicationConflict
+
+            raise PublicationConflict("PR description changed outside this agent")
+        self.description_updates.append(body)
+        self.state.body = body
 
     def pr_state(self, repo, number):
         return self.state
+
+    def notification_batch(self, since, last_modified="", max_pages=10):
+        return NotificationBatch(not_modified=True)
 
 
 class FakeCodex:
@@ -136,9 +161,15 @@ class FakeCodex:
         self.bad_fix = False
         self.weaken = False
         self.unsuitable = False
+        self.feedback_plan = None
 
     def ask(self, schema, prompt, sandbox, deadline, writable=False):
         self.calls.append(schema.__name__)
+        if schema is FeedbackPlan:
+            return self.feedback_plan or FeedbackPlan(
+                action="code", reason="concrete function documentation request",
+                evidence=["maintainer asks to document the function"],
+            )
         if schema is Assessment:
             return Assessment(
                 suitable=not self.unsuitable,

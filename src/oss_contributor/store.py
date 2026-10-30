@@ -41,6 +41,12 @@ class Store:
           CREATE TABLE IF NOT EXISTS notifications(
             id INTEGER PRIMARY KEY, fingerprint TEXT UNIQUE NOT NULL,
             data TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
+          CREATE TABLE IF NOT EXISTS github_inbox(
+            fingerprint TEXT PRIMARY KEY, task INTEGER NOT NULL,
+            thread TEXT NOT NULL, updated TEXT NOT NULL,
+            decision TEXT NOT NULL DEFAULT 'pending', created REAL NOT NULL);
+          CREATE TABLE IF NOT EXISTS notification_alerts(
+            notification INTEGER PRIMARY KEY, delivered REAL NOT NULL);
         """)
 
     def close(self):

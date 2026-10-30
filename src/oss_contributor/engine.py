@@ -9,7 +9,16 @@ from contextlib import nullcontext
 from .codex import Codex
 from .config import Config, Repository
 from .github import GitHub
-from .models import Assessment, Issue, Regression, Repair, ValidationReport
+from .models import (
+    ACKNOWLEDGEMENT,
+    FEEDBACK_GUIDANCE,
+    Assessment,
+    FeedbackPlan,
+    Issue,
+    Regression,
+    Repair,
+    ValidationReport,
+)
 from .process import ContributorError, PublicationConflict, QuotaExhausted, RateLimited
 from .safety import check_regression, eligibility, validate_changes
 from .sandbox import DockerSandbox
@@ -250,10 +259,12 @@ class Engine:
         try:
             branch, sha = self.github.base(name)
             base = self.github.snapshot(name, sha)
-            path = f"tests/test_oss_regression_{number}.py"
+            path = (
+                task["data"]["regression_path"]
+                if revision else f"tests/test_oss_regression_{number}.py"
+            )
             if path in base:
                 raise ContributorError("reserved regression path already exists upstream")
-            self.store.update(task_id, base_sha=sha, base_branch=branch, regression_path=path)
             with self.sandbox(repo, base, deadline) as worker:
                 report = ValidationReport(base_sha=sha)
                 self.baseline(worker, repo, report)
@@ -262,6 +273,26 @@ class Engine:
                     self.ensure_patch_fits(base, task["data"])
                     worker.apply(prior)
                     regression_content = prior[path]
+                    remote = self.github.pr_state(name, task["data"]["pr"]["number"])
+                    plan = self.model(
+                        FeedbackPlan,
+                        FEEDBACK_GUIDANCE + "\n" + json.dumps({
+                            "feedback": [e.model_dump() for e in revision_events or []],
+                            "repair": task["data"]["repair"],
+                            "pr": remote.model_dump(),
+                        }, ensure_ascii=False),
+                        worker, deadline,
+                    )
+                    if not plan.reason.strip() or not plan.evidence:
+                        raise ContributorError("feedback classification lacks evidence")
+                    if plan.action == "needs_attention":
+                        raise ContributorError(plan.reason)
+                    if plan.action == "description":
+                        if plan.repair is None:
+                            raise ContributorError("description feedback lacks revised explanation")
+                        self.prepare_description(task, plan.repair, revision_events or [], remote.body)
+                        self.publish(self.store.get(task_id), deadline)
+                        return
                 else:
                     assessment = self.model(
                         Assessment,
@@ -305,6 +336,8 @@ class Engine:
                     Repair,
                     "Fix only this small bug in Python source. Do not change any test or configuration. "
                     "Use repo_apply to edit and sandbox_exec to investigate in the offline container. "
+                    "Write a concise factual summary (one or two sentences) and root cause (one sentence); "
+                    "keep command logs and process assurances out of these fields. "
                     "If feedback cannot safely be addressed, make no changes and explain.\n"
                     + json.dumps(
                         {
@@ -333,12 +366,16 @@ class Engine:
                 if revision and changes == task["data"]["changes"]:
                     raise ContributorError("review/CI feedback produced no new source changes")
             report = self.validate(repo, base, changes, path, sha, deadline)
-            self.store.update(task_id, report=report.model_dump())
             if not report.passed:
                 raise ContributorError(report.failure)
             self.store.update(
                 task_id,
                 "validated",
+                base_sha=sha,
+                base_branch=branch,
+                regression_path=path,
+                publication_kind="source",
+                report=report.model_dump(),
                 changes=changes,
                 repair=repair.model_dump(),
                 base_hashes=self.base_hashes(base, changes),
@@ -353,7 +390,10 @@ class Engine:
         except (ContributorError, OSError, ValueError) as exc:
             if report is not None and not report.passed:
                 report.failure = str(exc)
-                self.store.update(task_id, report=report.model_dump())
+                if revision:
+                    self.store.update(task_id, last_attempt_report=report.model_dump())
+                else:
+                    self.store.update(task_id, report=report.model_dump())
             current = self.store.get(task_id)
             if current["status"] in {"publishing", "validated"} and current["data"].get(
                 "report", {}
@@ -378,33 +418,78 @@ class Engine:
 
     def body(self, task: dict) -> str:
         data = task["data"]
-        report = data["report"]
+        if not data.get("report", {}).get("passed"):
+            raise ContributorError("PR description requires independent validation")
         issue = Issue.model_validate(data["issue"])
         repair = Repair.model_validate(data["repair"])
+        if (
+            not repair.root_cause.strip() or not repair.summary.strip() or not repair.evidence
+            or len(repair.root_cause) + len(repair.summary) > 2400
+        ):
+            raise ContributorError("PR explanation must be concise and supported by evidence")
         lines = [
             issue.pr_template.strip(),
             f"Fixes #{issue.number}",
             "",
-            "## Root cause",
-            repair.root_cause,
+            repair.root_cause.strip(),
             "",
-            "## Change",
-            repair.summary,
+            repair.summary.strip(),
             "",
-            "## Verification",
-            f"Base commit: `{report['base_sha']}`.",
-            "The same regression test failed with an assertion on the original source and passed after the fix.",
-        ]
-        for result in report["commands"]:
-            lines.append(f"- `{json.dumps(result['argv'])}` — exit {result['code']}")
-        lines += [
+            "Validation: the regression fails on the original code and passes with the fix; "
+            "the configured test suite and checks pass.",
             "",
-            "This PR was prepared automatically by OSS Contributor using Codex. "
-            "Repository commands and independent verification ran in credential-free Docker containers.",
-            "Merge decisions remain with the project maintainers.",
+            "AI-assisted with Codex; independently tested by OSS Contributor.",
             f"<!-- oss-contributor:issue:{issue.number} -->",
         ]
         return "\n".join(lines).strip()
+
+    def prepare_description(self, task: dict, repair: Repair, events: list, old_body: str):
+        """Persist a description-only intent without changing the validated patch/report."""
+        self.ensure_unpaused()
+        self.ensure_task_scope(task)
+        data = task["data"]
+        if not data.get("pr") or not data.get("report", {}).get("passed"):
+            raise ContributorError("description revision requires an existing verified PR")
+        if not events or any(e.kind != "review" for e in events):
+            raise ContributorError("description revision cannot address CI feedback")
+        if data.get("revisions", 0) >= self.config.limits.revisions_per_pr:
+            raise ContributorError("revision limit reached")
+        candidate = {**task, "data": {**data, "repair": repair.model_dump()}}
+        body = self.body(candidate)
+        if body == old_body:
+            raise ContributorError("description feedback produced no explanation change")
+        self.store.update(
+            task["id"], "validated", publication_kind="description",
+            description_previous_body=old_body, description_body=body,
+            pending_events=[e.id for e in events], repair=repair.model_dump(),
+            revisions=data.get("revisions", 0) + 1,
+        )
+
+    def _publish_description(self, task: dict):
+        data, ident = task["data"], task["id"]
+        pr = data["pr"]
+        remote = self.github.pr_state(task["repo"], pr["number"])
+        if remote.state != "open" or remote.stop:
+            self.store.update(
+                ident, remote.state if remote.state != "open" else "stopped",
+                reason="maintainer decision recorded",
+            )
+            return
+        if remote.head_sha != pr["head_sha"]:
+            raise PublicationConflict("PR Head changed before description update")
+        pending = set(data["pending_events"])
+        if any(e.id not in pending and not self.store.seen(ident, e.id)
+               and not (e.kind == "review" and ACKNOWLEDGEMENT.fullmatch(e.body)) for e in remote.events):
+            raise PublicationConflict("new feedback arrived during description revision")
+        if remote.waiting:
+            raise PublicationConflict("CI must settle before description update: " + remote.waiting)
+        self.store.update(ident, "publishing")
+        self.github.update_pr_body(
+            task["repo"], pr["number"], data["description_body"], pr["head_sha"],
+            data["description_previous_body"],
+        )
+        self.store.mark_seen(ident, data["pending_events"])
+        self.store.update(ident, "open", reason="", waiting="", publication_kind="source")
 
     def publish(self, task: dict, deadline: float):
         with self.github.bounded(deadline) if isinstance(self.github, GitHub) else nullcontext():
@@ -448,6 +533,9 @@ class Engine:
         reason = eligibility(fresh, repo)
         if reason:
             raise PublicationConflict(f"pre-publication check: {reason}")
+        if data.get("publication_kind") == "description":
+            self._publish_description(task)
+            return
         base_branch, latest_sha = self.github.base(task["repo"])
         if latest_sha != data["base_sha"]:
             latest = self.github.snapshot(task["repo"], latest_sha)
@@ -484,6 +572,22 @@ class Engine:
                 )
                 return
             self.store.update(task_id, publication_reserved=self.store.day())
+        if data.get("pr"):
+            current = self.github.pr_state(task["repo"], data["pr"]["number"])
+            if current.state != "open" or current.stop:
+                self.store.update(
+                    task_id, current.state if current.state != "open" else "stopped",
+                    reason="maintainer decision recorded before publication",
+                )
+                return
+            if current.head_sha != data["pr"]["head_sha"]:
+                raise PublicationConflict("PR Head changed before revision publication")
+            assigned = set(data.get("pending_events", []))
+            if any(e.id not in assigned and not self.store.seen(task_id, e.id)
+                   and not (e.kind == "review" and ACKNOWLEDGEMENT.fullmatch(e.body)) for e in current.events):
+                raise PublicationConflict("new feedback arrived before revision publication")
+            if current.waiting:
+                raise PublicationConflict("CI evidence changed before revision publication: " + current.waiting)
         self.store.update(task_id, "publishing", publication_branch=branch_name)
         result = self.github.publish(
             task["repo"],

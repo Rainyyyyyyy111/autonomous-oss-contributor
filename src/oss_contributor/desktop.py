@@ -21,7 +21,15 @@ from pydantic import Field, ValidationError
 
 from .engine import Engine, merged
 from .installation import install_skill as install_skill
-from .models import Assessment, Repair, StrictModel
+from .models import (
+    ACKNOWLEDGEMENT,
+    FEEDBACK_GUIDANCE,
+    Assessment,
+    PRState,
+    Repair,
+    ReviewEvent,
+    StrictModel,
+)
 from .process import ContributorError, PublicationConflict, RateLimited
 from .safety import MAX_ARCHIVE, eligibility, validate_changes
 from .sandbox import DockerSandbox
@@ -31,14 +39,11 @@ class Handoff(StrictModel):
     """Worker claims are inputs, never a controller validation report or authorization."""
 
     ticket: str
-    outcome: Literal["fixed", "skip", "needs_attention", "quota"]
+    outcome: Literal["fixed", "description", "skip", "needs_attention", "quota"]
     assessment: Assessment
     repair: Repair | None = None
     changes: dict[str, str | None] = Field(default_factory=dict)
     reason: str = ""
-
-
-ACKNOWLEDGEMENT = re.compile(r"\s*(?:thanks!?|thank you!?|lgtm[.!]?|looks good[.!]?)\s*", re.I)
 
 
 class Desktop:
@@ -179,6 +184,15 @@ class Desktop:
             },
             "budget_resets_at": reset.isoformat(),
             "retry_after": retry if retry > now else None,
+            "github_notifications": {
+                "enabled": self.config.notifications.enabled,
+                "poll_seconds": self.config.notifications.poll_seconds,
+                "last_poll": self.store.meta("github_notifications_last_poll") or None,
+                "next_poll": self.store.meta("github_notifications_next_poll") or None,
+                "error": self.store.meta("github_notifications_error") or None,
+                "queued_tasks": [t["id"] for t in self.scoped_tasks(("open", "desktop_pending", "desktop_running", "desktop_validating"))
+                                 if t["data"].get("github_notification_pending")],
+            },
             "active_jobs": [
                 {
                     "ticket": job["ticket"],
@@ -298,9 +312,12 @@ class Desktop:
             return pending if pending["state"] == "cancelling" else None
         return job
 
-    def _observation(self, task: dict):
+    def _observation(self, task: dict, remote: PRState | None = None):
         pr = task["data"]["pr"]
-        remote = self.engine.github.pr_state(task["repo"], pr["number"])
+        remote = remote or self.engine.github.pr_state(task["repo"], pr["number"])
+        # A notification never reopens a locally terminal task.
+        if task["status"] in {"closed", "merged", "stopped"} and remote.state == "open":
+            return []
         old = task["data"].get("desktop_observation")
         self.store.update(
             task["id"], desktop_observation=remote.model_dump(), waiting=remote.waiting
@@ -373,14 +390,22 @@ class Desktop:
                 return self.result(reason=self.store.meta("paused"))
             if time.time() < float(self.store.meta("github_retry_after", "0")):
                 return self.result(reason="GitHub server-requested backoff")
+            from .notifications import NotificationWatcher
+
+            NotificationWatcher(self).poll()
+            if time.time() < float(self.store.meta("github_retry_after", "0")):
+                return self.result(reason="GitHub server-requested backoff")
             if active:
                 if active["data"]["revision"]:
-                    self._observation(self.store.get(active["task"]))
+                    feedback = self._observation(self.store.get(active["task"]))
                     current = self.store.get(active["task"])
                     if current["status"] in {"closed", "merged", "stopped", "needs_attention"}:
                         return self.fail(
                             active["ticket"], current["data"].get("reason", "PR no longer eligible")
                         )
+                    assigned = {e["id"] for e in active["data"]["events"]}
+                    if any(e.id not in assigned for e in feedback):
+                        return self.fail(active["ticket"], "new feedback requires stopping and reassessing the active revision")
                 return self.job_result(active)
             if self.store.meta("paused"):
                 return self.result(reason=self.store.meta("paused"))
@@ -406,18 +431,24 @@ class Desktop:
                 if current["status"] == "open" and current["data"].get("desktop_ticket"):
                     self.published(current)
             now = time.time()
-            if (
+            watch_due = (
                 now - float(self.store.meta("desktop_last_watch", "0"))
                 >= self.config.discovery.watch_seconds
-            ):
+            )
+            observed = self.scoped_tasks(("open", "needs_attention", "stopped"))
+            if watch_due or any(t["data"].get("github_notification_pending") for t in observed):
                 revision = None
-                for task in self.scoped_tasks(("open", "needs_attention", "stopped")):
+                for task in observed:
                     if not task["data"].get("pr"):
                         continue
+                    if not watch_due and not task["data"].get("github_notification_pending"):
+                        continue
                     events = self._observation(task)
+                    self.store.update(task["id"], github_notification_pending=False)
                     if events and revision is None:
-                        revision = task, events
-                self.store.set_meta("desktop_last_watch", str(now))
+                        revision = self.store.get(task["id"]), events
+                if watch_due:
+                    self.store.set_meta("desktop_last_watch", str(now))
                 if revision:
                     task, events = revision
                     job = self.dispatch(task, events)
@@ -548,6 +579,8 @@ class Desktop:
                 "regression_path": f"tests/test_oss_regression_{task['issue']}.py",
                 "revision": revision,
                 "previous_head": (task["data"].get("pr") or {}).get("head_sha"),
+                "previous_body": remote.body if revision else "",
+                "prior_repair": task["data"].get("repair") if revision else None,
                 "prior_changes": task["data"].get("changes", {}) if revision else {},
                 "events": [event.model_dump() for event in events or []],
                 "reserved_seconds": budget,
@@ -613,8 +646,13 @@ class Desktop:
             "All third-party installation and execution MUST use this project's DockerSandbox; no host execution, "
             "host mounts, credentials, Docker socket, browser, plugins, other MCPs or subagents. "
             "Install through PyPI only; repair and tests offline. Use the configured image and all configured tests/checks. "
-            "Establish a passing original baseline, add one meaningful regression failing with target AssertionError on original source, "
-            "then repair and prove the same regression and complete suite pass. Keep prior regression unchanged on revisions. "
+            "For a new repair, establish a passing original baseline, add one meaningful regression failing with target AssertionError on original source, "
+            "then repair and prove the same regression and complete suite pass. Keep prior regression unchanged on code revisions. "
+            "For revisions, first read every event, prior_changes, prior_repair and previous_body. "
+            + FEEDBACK_GUIDANCE + " "
+            "Use outcome=description with empty changes and a revised Repair only for explicit description-only requests; "
+            "do not run tests or edit code for this outcome. Use fixed for concrete code revisions and needs_attention for ambiguity. "
+            "Write concise factual Repair summary/root_cause; keep command transcripts and process assurances in local evidence. "
             f"At most {self.config.limits.max_files} files / {self.config.limits.max_lines} added+deleted lines. "
             "Never weaken existing tests or modify CI, dependencies, config or credentials. "
             "No GitHub writes: do not fork, push, create PRs, comment, reply, merge or approve CI. "
@@ -702,7 +740,7 @@ class Desktop:
         if handoff.outcome == "quota":
             return self.fail(ticket, handoff.reason or "native model quota exhausted", quota=True)
         task = self.store.get(job["task"])
-        if handoff.outcome != "fixed":
+        if handoff.outcome not in {"fixed", "description"}:
             if handoff.outcome == "needs_attention":
                 return self.fail(ticket, handoff.reason or handoff.assessment.reason)
             if job["data"]["revision"]:
@@ -729,6 +767,11 @@ class Desktop:
             or not handoff.repair.evidence
         ):
             raise ContributorError("repair lacks root cause, summary or evidence")
+        if handoff.outcome == "description" and (
+            not job["data"]["revision"] or handoff.changes
+            or not isinstance(job["data"].get("previous_body"), str)
+        ):
+            raise ContributorError("description outcome requires a revision with no file changes")
         repo = self.config.repository(task["repo"])
         if (
             repo is None
@@ -745,6 +788,8 @@ class Desktop:
             ):
                 fresh = self.engine.github.issue(task["repo"], task["issue"])
                 if job["data"]["revision"]:
+                    if task["status"] in {"needs_attention", "stopped", "closed", "merged"}:
+                        raise PublicationConflict("task was stopped or escalated while revision was running")
                     remote = self.engine.github.pr_state(task["repo"], task["data"]["pr"]["number"])
                     if (
                         remote.state != "open"
@@ -754,6 +799,11 @@ class Desktop:
                         raise PublicationConflict(
                             "PR stopped or Head changed while repair was running"
                         )
+                    assigned_events = {e["id"] for e in job["data"]["events"]}
+                    if any(e.id not in assigned_events and not self.store.seen(task["id"], e.id)
+                           and not (e.kind == "review" and ACKNOWLEDGEMENT.fullmatch(e.body))
+                           for e in remote.events):
+                        raise PublicationConflict("new feedback arrived while revision was running")
                     own = task["data"]["pr"]["url"]
                     fresh.conflicts = [
                         conflict for conflict in fresh.conflicts if own not in conflict
@@ -761,6 +811,19 @@ class Desktop:
                 reason = eligibility(fresh, repo)
                 if reason:
                     raise PublicationConflict(reason)
+                if handoff.outcome == "description":
+                    self.engine.prepare_description(
+                        task, handoff.repair,
+                        [ReviewEvent.model_validate(e) for e in job["data"]["events"]],
+                        job["data"]["previous_body"],
+                    )
+                    job["data"]["handoff_digest"] = digest
+                    self.settle(job, "complete")
+                    self.engine.publish(self.store.get(task["id"]), deadline)
+                    updated = self.store.get(task["id"])
+                    if updated["status"] == "open":
+                        self.published(updated)
+                    return self.result(reason=updated["status"], task_id=task["id"])
                 base = self.engine.github.snapshot(task["repo"], job["data"]["base_sha"])
                 regression = job["data"]["regression_path"]
                 if (
@@ -788,6 +851,7 @@ class Desktop:
                 self.store.update(
                     task["id"],
                     "validated",
+                    publication_kind="source",
                     assessment=handoff.assessment.model_dump(),
                     repair=handoff.repair.model_dump(),
                     changes=accepted,

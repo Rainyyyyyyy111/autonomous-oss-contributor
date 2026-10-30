@@ -32,6 +32,7 @@ flowchart LR
 - Default patch limit: **5 files / 200 added + deleted lines**, including the regression test. Existing tests, CI, dependency and credential files are protected.
 - Persist task state, publication intent and remote Head. Reconcile interruptions without force-pushing or creating duplicate PRs.
 - Follow only current-head CI and maintainer feedback. Waiting for workflow approval does not trigger a repair. No automatic comments, review replies, CI approval or merging.
+- Optional GitHub notification listener: conditional polling (default 60 seconds), scoped immediate triage, durable priority queue and macOS alerts. See [notification monitoring](docs/desktop-workflow.md#github-notification-listener).
 
 These checks reduce mistakes; they are not a proof that generated code is correct or that an adversarial repository cannot forge its own test results. Read [SECURITY.md](SECURITY.md).
 

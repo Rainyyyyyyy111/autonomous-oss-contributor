@@ -83,6 +83,20 @@ uv run oss-contributor desktop install-skill --upgrade
 
 主模式仍是自动选 Issue。固定 PR 跟进则用 `desktop scope --monitor --task-id 1 --task-id 2` 一次性冻结仓库/Issue/PR 身份，后续即使漏传监控参数也不会扩权。`desktop scope --autopilot` 仅在用户要求启动完整自动贡献时切换，且不能绕过活动聊天。技能会自动执行这些协调命令，不要求用户逐个 Issue 操作。
 
+## GitHub 通知监听
+
+新增轻量通知监听器，默认约每 60 秒检查一次；遵守 GitHub 返回的更长间隔和限流退避。只核验已授权、已跟踪的 PR，以及相关 Issue/CI 通知，不会把 GitHub 通知标为已读。关闭、合并、停止、提交变化和 CI 状态先由程序判断；具体评审进入优先队列，含糊的质量投诉可转为需人工处理。通知可能不完整，因此默认每 10 分钟另行核对 PR 状态。
+
+```sh
+uv run oss-contributor notifications poll --config /path/to/config.toml
+uv run oss-contributor notifications service --install --config /path/to/config.toml
+uv run oss-contributor notifications service --uninstall --config /path/to/config.toml
+# 非 macOS 或前台调试
+uv run oss-contributor notifications watch --config /path/to/config.toml
+```
+
+macOS 后台监听可发送本机系统通知，并独立记录送达结果；不会提前确认 Codex 聊天已送达。监听器不调用模型、不创建修复聊天、不修改远端 PR。复杂评审在现有 Codex 协调心跳运行时处理，默认仍为 10 分钟；“每分钟检测”不代表每分钟完成模型判断。电脑需要保持唤醒，系统通知是否显示取决于 macOS 通知权限及专注模式。`desktop status` 提供最近检查时间、错误和排队任务。
+
 ## 隔离与现实限制
 
 第三方代码只在非 root Docker 容器执行：无用户目录/认证/Docker Socket 挂载，只读根，默认 2 CPU / 4 GiB / 128 进程。安装仅通过 PyPI 代理，修复和测试断网。文件桥接拒绝路径穿越、链接、特殊文件及超限输入，单文件 4 MiB、展开归档总量 40 MB。
