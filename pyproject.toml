@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autonomous-oss-contributor"
+version = "0.1.0a1"
+description = "Evidence-driven, isolated OSS contributions with Codex and GitHub CLI"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Rainyyyyyyy111" }]
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = ["typer>=0.15,<1", "pydantic>=2.10,<3"]
+
+[project.urls]
+Homepage = "https://github.com/Rainyyyyyyy111/autonomous-oss-contributor"
+Issues = "https://github.com/Rainyyyyyyy111/autonomous-oss-contributor/issues"
+Source = "https://github.com/Rainyyyyyyy111/autonomous-oss-contributor"
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.11", "mypy>=1.15"]
+
+[project.scripts]
+oss-contributor = "oss_contributor.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oss_contributor"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/scripts", "/docs", "/README*", "/LICENSE", "/CONTRIBUTING.md", "/SECURITY.md", "/CHANGELOG.md", "/config.example.toml", "/pyproject.toml", "/uv.lock"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["docker: requires a running Docker daemon", "live: opt-in authenticated integration"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+plugins = ["pydantic.mypy"]

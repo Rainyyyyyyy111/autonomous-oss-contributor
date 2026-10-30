@@ -1,0 +1,31 @@
+# No repository is authorized until explicitly added below.
+timezone = "Asia/Singapore"
+codex_version = "0.140.0"
+# model = "your available Codex model"  # otherwise use the account default
+
+[limits]
+attempts_per_day = 3
+prs_per_day = 1
+task_seconds = 1800
+model_seconds_per_day = 7200
+revisions_per_pr = 2
+open_prs = 3
+max_files = 5
+max_lines = 200
+
+[discovery]
+min_stars = 500
+pushed_days = 30
+max_repositories = 50
+issues_per_repo = 10
+interval_seconds = 3600
+watch_seconds = 600
+
+# [[repositories]]
+# name = "your-account/your-test-repository"
+# image = "oss-contributor-runner:0.1"
+# install = [["python", "-m", "pip", "install", "-e", ".[test]"]]
+# tests = [["python", "-m", "pytest", "-q"]]
+# checks = [["python", "-m", "ruff", "check", "."]]
+# contribution_policy_reviewed = true
+# cla_completed = false

@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible problem with this CLI.
+body:
+  - type: markdown
+    attributes:
+      value: Please use private security reporting for vulnerabilities. Do not upload tokens, auth caches, state databases or private repository code.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python, project version, Docker, Codex CLI and execution path (standalone or desktop recipe).
+    validations:
+      required: true
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Reproduction
+      description: Minimal steps using a repository you control or a synthetic fixture. Include expected and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Relevant command, exit code and short sanitized output. A successful doctor handshake alone does not prove model access.
