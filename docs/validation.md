@@ -6,6 +6,7 @@
 - Protocol tests reject unknown host operations/native capabilities and enforce stage-specific dynamic tools. Archive tests reject traversal, links, duplicates and oversize entries.
 - Opt-in real Docker tests exercise independent red/green/full-suite verification, non-root isolation, absent credentials/socket, symlink rejection, offline execution, PyPI installation and forbidden-host/direct-egress rejection.
 - Distribution validation builds a wheel and sdist, installs the wheel into a fresh environment, checks the CLI and confirms that the Docker runtime files are included.
+- Native-controller tests cover automatic issue selection without a CLI model call, persisted chat leases and wait cursors, atomic budget reservation/settlement, identity/authorization/path checks, quality rejection, interruption recovery, terminal feedback, revision limits and the notification outbox. A Docker handoff test uses actual clean-container verification and simulated GitHub publication.
 
 The default suite excludes live account execution unless explicitly enabled. CI requires no model/GitHub credentials and never publishes upstream contributions. Docker checks run on default-branch pushes and manual dispatch. A green CI run validates these scopes, not arbitrary upstream compatibility or model access.
 
@@ -31,8 +32,8 @@ Rejected candidates included already-fixed or claimed issues, duplicate ready fi
 
 ## Known blockers before Beta
 
-1. Complete a reproducible live standalone CLI run with a model accessible to the operator. In the development account, protocol handshake worked but model turns returned `model_not_found`; no authentication fallback was attempted.
-2. Package a stable, validated desktop handoff/import interface instead of session-specific coordinating scripts. Native App tools are not called by the Python daemon.
+1. Exercise the packaged 0.2 desktop scheduler over a long-running native App cycle, including a coordinator restart; the three earlier real contributions used session-specific coordination. Fixture coverage does not prove App uptime or native chat creation/cancellation behavior under every failure.
+2. The optional standalone adapter still needs a reproducible live model run. In the development account, handshake worked but model turns returned `model_not_found`; this does not block the native desktop path. No authentication fallback was attempted.
 3. Validate revision cycles against a controlled repository with readable failing current-head CI and actionable review. Existing coverage of those paths is simulated; the submitted upstream PRs had no actionable review yet.
 4. Improve contribution-policy/ownership evidence beyond conservative text heuristics and document more supported project environments.
 5. Obtain independent review of the security boundary, generated-test relevance and adversarial harness limitations.

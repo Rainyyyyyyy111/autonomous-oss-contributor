@@ -8,6 +8,7 @@ The Python controller owns authorization, budgets, state transitions, verificati
 | `store.py` | SQLite tasks/usage/events, worker lock, processed-feedback IDs, JSONL mirror |
 | `github.py` | Host `gh` API adapter, public evidence, fork/commit/PR recovery, current-head CI/review |
 | `codex.py` | Version-pinned App Server adapter, isolated config, structured output, restricted dynamic tools |
+| `desktop.py`, bundled skill | Primary native-chat autopilot: automatic selection, durable leases/cursors, strict handoffs, independent verification/publication and notification delivery |
 | `sandbox.py`, `runtime/` | Docker lifecycle, PyPI proxy, offline execution, bounded file bridge |
 | `safety.py` | Paths, archives, contribution evidence heuristics, patch and regression checks |
 | `engine.py` | Baseline → assessment → failing regression → repair → clean verification → publication → observation |
@@ -24,7 +25,7 @@ Transient rate limits use server-provided retry information. Publication interru
 
 The standalone adapter starts host Codex with a temporary configuration and no target repository as its host working directory. It sends `environments: []` on thread/turn creation and exposes controller-supplied dynamic tools. Read-only stages get list/read/search; repair additionally gets source apply and container execution. Unexpected native host execution, browser, MCP or collaboration events abort the session. Credentials stay on the host.
 
-The default CLI uses this adapter. It **does not** know how to invoke the desktop app's native chat tools. The separate desktop recipe is a coordinating-chat workflow and is described in [desktop-workflow.md](desktop-workflow.md).
+The standalone `run` CLI uses this optional adapter. The primary desktop autopilot uses the bundled skill and App-native tools, with the Python `desktop` command group owning durable selection, reservations, handoffs and publication. Python **does not** invoke a public desktop RPC API. This separation and restart protocol are described in [desktop-workflow.md](desktop-workflow.md).
 
 ## Quality boundary
 

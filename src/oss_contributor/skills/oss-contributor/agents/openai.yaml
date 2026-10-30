@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autonomous OSS Contributor"
+  short_description: "Automatic issue selection, verified fixes and PR follow-up"
+  default_prompt: "Use $oss-contributor to start automatic issue discovery, Docker-verified repair and PR follow-up within my configured allowlist; create a new native chat for each repair or revision."

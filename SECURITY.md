@@ -2,7 +2,7 @@
 
 ## Supported release
 
-Only the latest `0.1.0a*` prerelease is supported on a best-effort basis. This project is experimental and has not undergone an independent security audit. Do not run it on a host containing credentials or data you cannot afford to expose.
+Only the latest Alpha prerelease is supported on a best-effort basis. This project is experimental and has not undergone an independent security audit. Do not run it on a host containing credentials or data you cannot afford to expose.
 
 Report a vulnerability privately through [GitHub private vulnerability reporting](https://github.com/Rainyyyyyyy111/autonomous-oss-contributor/security/advisories/new). Include a minimal synthetic reproducer, affected version, expected boundary and observed behavior. Do not include live credentials or attack a third-party project. Ordinary non-sensitive bugs can use public issues.
 

@@ -15,7 +15,8 @@ from .safety import check_regression, eligibility, validate_changes
 from .sandbox import DockerSandbox
 from .store import Store
 
-OPEN = ("open", "revising", "publishing", "validated", "needs_attention", "stopped")
+OPEN = ("open", "revising", "publishing", "validated", "needs_attention", "stopped",
+        "desktop_pending", "desktop_running", "desktop_validating")
 
 
 def merged(base: dict[str, str], changes: dict[str, str | None]) -> dict[str, str]:
@@ -524,6 +525,9 @@ class Engine:
 
     def once(self):
         if self.store.meta("paused"):
+            return
+        # An asynchronous native repair holds the serial model slot across CLI calls.
+        if self.store.desktop_jobs():
             return
         try:
             if self.cleanup_needed and self.config.repositories:

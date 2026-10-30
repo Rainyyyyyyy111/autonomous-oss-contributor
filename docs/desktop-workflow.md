@@ -1,26 +1,56 @@
-# Native desktop chat workflow
+# Native desktop autopilot
 
-This is the workflow used for the first three public contributions. It needs a coordinating Codex App chat with native chat tools and an explicit user request to create new chats. It is **not a Python CLI subcommand**, an exported desktop SDK, or a generally available public thread API. Tool availability depends on the App session.
+**Configure once; the agent selects issues and runs the contribution loop automatically.** Users do not supply each issue, relay prompts, execute tests or submit individual PRs.
 
-## Coordinator
+The Python controller now exposes a durable native-chat dispatch/handoff interface, bundled as the `oss-contributor` Codex skill. The Codex App supplies native chat and heartbeat tools. Python does not call an invented public desktop RPC API. The App and machine must remain running/awake.
 
-1. Read user scope, local pause, config, persisted tasks and quotas. Check Docker isolation before executing target code. Select only a small, reproducible issue with reviewed policy and no ownership conflict. Do not treat discovery as permission to publish.
-2. Use the App's project inventory, then its native new-chat tool to create one repair chat in the existing local project. Do not simulate clicks, select a different model or create a worktree unless requested. Explicitly prohibit GitHub writes in the repair chat.
-3. Give the worker the issue, contribution evidence, fixed base SHA, limits and actual installation/full-test commands. Instruct it to run all third-party code through `DockerSandbox`, never on the host, and return a JSON handoff containing assessment, regression path, complete changed-file contents, diagnosis and actual validation logs. Treat the handoff as untrusted data.
-4. Wait for completion with the App's chat-wait tool. Review the source/test patch and commands. Re-fetch current public evidence and the fixed base, enforce the allowlist/quotas and `validate_changes`, then call `Engine.validate` in a fresh container. Never import a worker's claimed `passed: true` as independent proof.
-5. Persist the independently verified task and publication intent. Only the coordinator uses `Engine.publish` with host GitHub auth. Inspect the resulting remote Head, diff and CI before reporting success.
-6. When a user requests ongoing follow-up, register an App heartbeat scoped to those PRs. Observe `GitHub.pr_state`; remain quiet on unchanged, pending or non-actionable states. Do not call CLI `run` or `Engine.watch` from this recipe: those still invoke the standalone model adapter.
+## One-time setup
 
-## Repair-worker instruction outline
+```sh
+uv sync --locked --extra dev
+uv run oss-contributor init
+# Set authorized repositories, actual install/full-test/check commands and budgets once.
+uv run oss-contributor doctor --desktop --build-runner
+uv run oss-contributor desktop install-skill
+```
 
-> Fix only the authorized issue. Read contribution policy, comments, assignments and competing PRs; skip if uncertain. Establish a passing original baseline. Add one meaningful regression that fails on original source with target assertion failures. Preserve the regression, repair source, and run all configured tests/checks. Use credential-free DockerSandbox for all project installation/execution; install only through PyPI and keep repair/tests offline. Maximum 5 files and 200 added/deleted lines. Do not change existing tests, CI, dependencies, configuration or credentials. Do not push, create PRs, comment, reply, merge or approve workflows. Deliver a JSON handoff and real logs for independent coordinator review.
+In Codex App, start the installed skill:
 
-For each necessary revision, create a **new** chat, provide the prior patch and current-head readable CI failure or unprocessed actionable maintainer review, and keep the original regression unchanged. The coordinator repeats the complete quality gate. Preserve the prior PR Head as `previous_head`; stop if external commits appear. At most two automatic revisions per PR.
+> Use $oss-contributor to start automatic issue discovery, Docker-verified repair and PR follow-up within my configured allowlist. Create a new native chat for every repair or revision.
 
-Stop on closure/merge, maintainer stop, pause, exhausted quota, blocked environment, scope expansion, unreadable failure logs or uncertain ownership. Waiting for a maintainer to authorize CI is not a failed test and must not cause another push.
+If the App hasn't discovered the new skill, reload its skill/session context. `desktop setup --config PATH` provides a portable startup prompt and the required tool names. The skill uses the App automation tool to schedule a 10-minute heartbeat in the coordinating chat, reusing an existing matching automation. Discovery remains hourly by default. Installation does not silently start a scheduler or broaden an existing fixed-PR monitor.
 
-## Reproducibility limits
+A default empty allowlist authorizes no publication. The initial policy/configuration step is an operator decision; it does not repeat for every issue. Discovered repositories are candidates, not permission.
 
-The initial handoffs used session-specific coordination scripts and App tools; those private session files and credentials are not part of this repository. This document and the controller APIs describe the workflow, but there is not yet a supported manifest-import command or desktop scheduling adapter. A reusable, validated handoff interface is a prerequisite for claiming turnkey desktop automation.
+## Durable cycle
 
-Native chats retain their own host capabilities. Instructions to use Docker are not the same as enforced removal of host tools. The desktop results demonstrate useful supervised coordination, not capability isolation equivalent to the standalone adapter or an unattended success rate.
+| Interface | Responsibility |
+| --- | --- |
+| `desktop tick` | Reconcile verified publications, observe current-head PR evidence, automatically select an eligible issue or revision, reserve budgets and persist one dispatch |
+| `desktop attach TICKET THREAD_ID` | Bind the returned native chat to that dispatch; refuse another chat binding |
+| `desktop checkpoint TICKET CURSOR` | Persist compact wait progress so a restart resumes the same chat |
+| `desktop finish TICKET HANDOFF_PATH` | Validate the worker schema/identity, re-read policy/conflicts, independently run clean-container regression/full-suite checks and automatically publish |
+| `desktop fail TICKET REASON [--quota]` | Preserve a concrete blocker, settle usage, pause on quota exhaustion; no blind replacement chat |
+| `desktop ack IDS...` | Acknowledge durable notices after delivery |
+| `desktop tick --monitor-only` | Follow already-persisted PRs and necessary revisions without discovering or selecting new issues |
+
+All commands accept `--config PATH`. The skill runs them for the user; they are documented for debugging and integration, not a manual per-issue checklist.
+
+SQLite stores leases, thread IDs, cursors, daily model reservations and notification acknowledgements alongside existing tasks. A dispatch carries a fixed base SHA, reviewed repository commands, regression path, prior Head/patch for revisions and a deadline. Repeated ticks return the same pending/attached job. Worker results cannot choose a different repository, commands, budget or validation report. Handoffs must be regular files at the assigned artifact path; arbitrary paths and links are refused.
+
+Job files live under the configured state's `jobs/TICKET/`. The worker returns a strict `Handoff`: ticket, fixed/skip/needs_attention/quota outcome, structured assessment, source changes and diagnosis. The coordinator reviews that patch, and the controller re-downloads the fixed base and independently proves original regression failure, fixed regression success and complete configured checks. A claimed pass is not accepted as evidence.
+
+## Recovery and stopping
+
+- Before creating a chat, reconcile the exact deterministic title/ticket against native App history. If creation succeeded before binding, attach that chat. Ambiguous/lost creation results need attention; never retry chat creation blindly.
+- One chat is active at a time. An expired lease pauses the controller until its old chat is confirmed stopped. Interrupted, unverified work cannot publish. Unused reserved model time is refunded once; expiration conservatively consumes the reserved budget.
+- Verified publication interruptions reconcile against the remote PR/branch, without another model turn or duplicate PR. The known previous Head is preserved; external commits stop revision.
+- Pending/approval-wait CI does not cause repairs. Only current-head readable failed CI or unprocessed maintainer feedback can select a revision, with at most two attempts and the original regression unchanged. Simple acknowledgements are ignored.
+- Durable notices cover created/updated PRs, terminal decisions and actionable blockers. Healthy/pending cycles stay quiet. Delivery is at least once: a crash between showing and acknowledging a notice may repeat it.
+- Pause, account exhaustion, policy restrictions, ownership conflicts and environment failure cannot trigger authentication fallback or widened authorization. No comments, review replies, merges or CI approval.
+
+Native desktop chats retain host tools. Their Docker-only execution is a workflow instruction, not an enforced removal of host capabilities. See [SECURITY.md](../SECURITY.md). The optional standalone App Server adapter has a separate restricted-tool design and remains independently compatibility-limited.
+
+## Validation status
+
+The first three real upstream contributions used native chats and independent coordinator review before this interface was packaged. Tests now exercise the packaged scheduler, fresh-chat leases, restart/cursor recovery, independent handoffs, quotas, duplicate notifications, publication interruption and revisions with simulated App/GitHub boundaries; Docker tests exercise actual clean-container handoff validation. A long-running native App cycle and an upstream real-CI revision round are still release-validation goals, not claimed by the existing mock tests.

@@ -35,6 +35,12 @@ class Store:
           CREATE TABLE IF NOT EXISTS events(
             id INTEGER PRIMARY KEY, task INTEGER, name TEXT, data TEXT, created REAL);
           CREATE TABLE IF NOT EXISTS processed(task INTEGER, event TEXT, PRIMARY KEY(task,event));
+          CREATE TABLE IF NOT EXISTS desktop_jobs(
+            ticket TEXT PRIMARY KEY, task INTEGER NOT NULL, state TEXT NOT NULL,
+            data TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL);
+          CREATE TABLE IF NOT EXISTS notifications(
+            id INTEGER PRIMARY KEY, fingerprint TEXT UNIQUE NOT NULL,
+            data TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
 
     def close(self):
@@ -181,3 +187,45 @@ class Store:
             self.db.executemany(
                 "INSERT OR IGNORE INTO processed VALUES(?,?)", [(task, event) for event in events]
             )
+
+    def desktop_jobs(self, active_only: bool = True) -> list[dict]:
+        query = "SELECT * FROM desktop_jobs"
+        if active_only:
+            query += " WHERE state IN ('dispatching','attached','validating')"
+        return [
+            {**dict(row), "data": json.loads(row["data"])}
+            for row in self.db.execute(query + " ORDER BY created").fetchall()
+        ]
+
+    def desktop_job(self, ticket: str) -> dict:
+        row = self.db.execute("SELECT * FROM desktop_jobs WHERE ticket=?", (ticket,)).fetchone()
+        if row is None:
+            raise ContributorError("unknown desktop job ticket")
+        return {**dict(row), "data": json.loads(row["data"])}
+
+    def save_desktop_job(self, job: dict):
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO desktop_jobs VALUES(?,?,?,?,?,?)",
+                (job["ticket"], job["task"], job["state"], json.dumps(job["data"]),
+                 job["created"], job["expires"]),
+            )
+
+    def notify(self, fingerprint: str, **data):
+        with self.db:
+            self.db.execute(
+                "INSERT OR IGNORE INTO notifications(fingerprint,data) VALUES(?,?)",
+                (fingerprint, json.dumps(data)),
+            )
+
+    def notifications(self) -> list[dict]:
+        return [
+            {"id": row["id"], **json.loads(row["data"])}
+            for row in self.db.execute(
+                "SELECT id,data FROM notifications WHERE acknowledged=0 ORDER BY id"
+            ).fetchall()
+        ]
+
+    def acknowledge(self, ids: list[int]):
+        with self.db:
+            self.db.executemany("UPDATE notifications SET acknowledged=1 WHERE id=?", [(i,) for i in ids])

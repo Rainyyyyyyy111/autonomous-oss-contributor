@@ -95,6 +95,7 @@ def test_ci_for_old_head_never_triggers_repair():
     state = client.pr_state("o/r", 1)
     assert not state.events
     assert not any("actions/runs/" in call for call in calls)
+    assert not state.ci
 
 
 def test_ci_action_required_is_waiting_not_failed():
@@ -116,6 +117,8 @@ def test_approval_wait_is_detected_before_check_runs_exist():
     state = client.pr_state("o/r", 1)
     assert state.waiting == "CI awaiting maintainer authorization"
     assert not state.events
+    assert state.ci[0]["id"] == 12
+    assert state.ci[0]["head_sha"] == "a" * 40
 
 
 def test_actions_for_an_old_head_do_not_block_the_current_head():

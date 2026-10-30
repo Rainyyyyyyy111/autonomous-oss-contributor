@@ -75,3 +75,4 @@ class PRState(StrictModel):
     events: list[ReviewEvent] = []
     waiting: str = ""
     stop: bool = False
+    ci: list[dict[str, Any]] = []

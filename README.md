@@ -2,9 +2,11 @@
 
 [中文说明](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Desktop workflow](docs/desktop-workflow.md) · [Contributing](CONTRIBUTING.md)
 
-A personal Python CLI for finding small, reproducible bugs, repairing them with Codex, verifying the patch in Docker, and submitting a GitHub pull request with test evidence.
+Configure once. The agent discovers Python projects, selects suitable bugs, starts a fresh Codex chat for each repair, independently verifies patches in Docker, submits PRs, and follows CI/review within your allowlist and budgets. Users do not pick each issue or relay the workflow.
 
-**Experimental Alpha — `0.1.0a1`.** The controller, safety gates and publication recovery are implemented and tested. Three real upstream PRs were submitted through a **Codex desktop chat workflow with a coordinating chat reviewing and independently verifying each patch**. The standalone CLI model path has not completed a live end-to-end run in the development account: model turns returned `model_not_found`. A successful protocol handshake does not prove model access. See [what is validated](docs/validation.md) before running unattended.
+**Experimental Alpha — `0.2.0a1`.** Native Codex App chat coordination is the primary path: an installable skill + heartbeat drive a durable Python controller with job leases, restart recovery, strict handoffs and automatic verification/publication. Three real upstream PRs previously used desktop repair chats with independent coordinating review. The packaged scheduler has fixture/adapter and Docker coverage; unattended longevity and a real remote-CI revision round remain unverified. See [validation scope](docs/validation.md).
+
+The optional standalone App Server backend remains available; live model turns returned `model_not_found` in the development account. That backend is not required by the desktop autopilot.
 
 The goal is a useful, verifiable PR. Acceptance and merging remain the upstream maintainer's decision.
 
@@ -35,7 +37,7 @@ These checks reduce mistakes; they are not a proof that generated code is correc
 
 ## Install and inspect
 
-Prerequisites: macOS or Linux, Python **3.12+**, [uv](https://docs.astral.sh/uv/), authenticated [GitHub CLI](https://cli.github.com/), running Docker, and **Codex CLI `0.140.0`** for the standalone adapter. The default runner uses Python 3.12. Never send credentials into target containers.
+Prerequisites: macOS or Linux, Python **3.12+**, [uv](https://docs.astral.sh/uv/), authenticated [GitHub CLI](https://cli.github.com/), running Docker, and Codex App with native chat/heartbeat tools for the primary desktop path. **Codex CLI `0.140.0`** is needed only for the optional standalone adapter. The default runner uses Python 3.12. Never send credentials into target containers.
 
 ```sh
 git clone https://github.com/Rainyyyyyyy111/autonomous-oss-contributor.git
@@ -43,11 +45,12 @@ cd autonomous-oss-contributor
 uv sync --locked --extra dev
 uv run oss-contributor --help
 uv run oss-contributor init
-uv run oss-contributor doctor --build-runner --probe-codex
+uv run oss-contributor doctor --desktop --build-runner
+uv run oss-contributor desktop install-skill
 uv run oss-contributor status
 ```
 
-If needed, log in yourself with `gh auth login` and `codex login`. The standalone adapter requires a file-backed Codex auth cache; a Keychain-only login is insufficient. It references that cache on the host. Protocol fields are experimental and the CLI version must match the configured pin.
+Log in to GitHub once with `gh auth login` and use the existing Codex App login. The optional standalone adapter uses `codex login` and requires a file-backed Codex auth cache; a Keychain-only login is insufficient. It references that cache on the host. Protocol fields are experimental and the CLI version must match the configured pin.
 
 Default configuration: `~/.config/oss-contributor/config.toml`. Override it per command with `--config /path/to/config.toml`. See [config.example.toml](config.example.toml).
 
@@ -74,20 +77,23 @@ cla_completed = false
 
 Install dependencies through PyPI only. Projects requiring apt, private indexes, Git dependencies, external services or another Python version need a reviewed custom image or must be skipped. Custom images must preserve the trusted bridge, non-root user and `/opt/venv` conventions. Images and local configuration are trusted operator inputs.
 
-Only after verifying your model access and a complete run against your own repository:
+## Start automatic contribution
+
+After that one-time setup, ask the Codex App:
+
+> Use $oss-contributor to start automatic issue discovery, Docker-verified repair and PR follow-up within my configured allowlist. Create a new native chat for each repair or revision.
+
+The skill schedules the native heartbeat, automatically selects issues, creates/resumes repair chats and feeds their structured results to independent verification/publication. Normal cycles need no user interaction. Only account/environment/scope blockers need attention. The default empty allowlist publishes nothing.
 
 ```sh
-uv run oss-contributor run --once
-# Alternatively: foreground polling, stops when the process or machine stops.
-uv run oss-contributor run --daemon
-uv run oss-contributor inspect 1
+uv run oss-contributor status
 uv run oss-contributor pause
 uv run oss-contributor resume
 ```
 
-Use a root-level `model = "your-available-model"` if necessary. The adapter otherwise reads only the model string from the user's Codex config, not its tools, hooks or project rules. `doctor --probe-codex` performs a no-token protocol handshake, **not** a model turn. There is no automatic authentication fallback.
+[Desktop autopilot and recovery](docs/desktop-workflow.md) documents the packaged `desktop tick/attach/checkpoint/finish` interfaces. Native tools come from the App session; this is not a standalone public desktop API. The App and machine must stay running/awake.
 
-The [desktop workflow](docs/desktop-workflow.md) uses native new chats and avoids the failing standalone model path. It is a documented App-assisted workflow, **not an implemented Python desktop scheduler or a portable public thread API**.
+For the optional standalone adapter, first verify accessible model execution and a complete run on your own repository, then use `run --once` or `run --daemon`. A root-level `model = "your-available-model"` selects an available model. `doctor --probe-codex` checks protocol only, not model access. No authentication fallback is attempted.
 
 ## Limits and recovery
 
@@ -102,7 +108,7 @@ The [desktop workflow](docs/desktop-workflow.md) uses native new chats and avoid
 | Observation | Every 10 minutes while the worker runs |
 | Accounting | `Asia/Singapore` date, configurable |
 
-State lives in `~/.local/share/oss-contributor/`: SQLite is authoritative; JSONL is an inspectable event mirror. Keep it across restarts. Quotas and processed events do not reset on `resume`. `pause` prevents new model calls and publication; an already-running bounded call may finish. CLI polling needs a running foreground process; it does not register a launch agent or survive Mac sleep.
+State lives in `~/.local/share/oss-contributor/`: SQLite is authoritative; JSONL is an inspectable event mirror. Keep it across restarts. Quotas and processed events do not reset on `resume`. `pause` prevents new model calls and publication; an already-running bounded call may finish. Desktop scheduling uses an App heartbeat; standalone CLI polling uses a foreground process. Neither survives Mac sleep or a stopped App/process. Native job leases and notification delivery survive coordinator restarts.
 
 ## Execution boundary
 
@@ -135,7 +141,7 @@ uv build
 uv run python scripts/smoke_wheel.py
 # Real container isolation, network boundary and red/green verification:
 uv run oss-contributor init --config /tmp/oss-contributor-dev.toml
-uv run oss-contributor doctor --config /tmp/oss-contributor-dev.toml --build-runner
+uv run oss-contributor doctor --desktop --config /tmp/oss-contributor-dev.toml --build-runner
 OSS_TEST_DOCKER=1 uv run pytest tests/test_docker.py -q
 ```
 

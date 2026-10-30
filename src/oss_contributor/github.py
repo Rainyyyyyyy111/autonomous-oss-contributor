@@ -281,6 +281,7 @@ class GitHub:
         checks = self.api(f"repos/{repo}/commits/{head}/check-runs?per_page=100")
         statuses = self.api(f"repos/{repo}/commits/{head}/status?per_page=100")
         waiting = ""
+        ci = []
         # First-time fork contributions can require approval before GitHub creates
         # any check runs. Looking only at checks would incorrectly report no wait.
         try:
@@ -295,6 +296,8 @@ class GitHub:
             for action in actions.get("workflow_runs", []):
                 if action.get("head_sha") != head:
                     continue
+                ci.append({"kind": "actions", "id": action.get("id"), "head_sha": head,
+                           "status": action.get("status"), "conclusion": action.get("conclusion")})
                 if action.get("conclusion") == "action_required":
                     waiting = "CI awaiting maintainer authorization"
                 elif action.get("status") != "completed":
@@ -304,6 +307,8 @@ class GitHub:
         for check in checks.get("check_runs", []):
             if check.get("head_sha") != head:
                 continue
+            ci.append({"kind": "check", "id": check.get("id"), "head_sha": head,
+                       "status": check.get("status"), "conclusion": check.get("conclusion")})
             if check.get("status") != "completed" or check.get("conclusion") in {
                 "action_required",
                 "stale",
@@ -332,6 +337,8 @@ class GitHub:
                         )
                     )
         for status in statuses.get("statuses", []):
+            ci.append({"kind": "status", "id": status.get("id"), "head_sha": head,
+                       "status": status["state"], "conclusion": None})
             if status["state"] in {"failure", "error"}:
                 waiting = waiting or "external CI failure requires accessible logs"
             elif status["state"] == "pending":
@@ -345,6 +352,7 @@ class GitHub:
                 events=events,
                 waiting=waiting,
                 stop=stop,
+                ci=ci,
             )
         )
 

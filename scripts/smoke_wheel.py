@@ -22,6 +22,7 @@ def main():
         names = archive.namelist()
         for resource in ("Dockerfile", "bridge.py", "proxy.py"):
             assert f"oss_contributor/runtime/{resource}" in names, resource
+        assert "oss_contributor/skills/oss-contributor/SKILL.md" in names
         assert any(name.endswith("/licenses/LICENSE") for name in names)
         assert not any("auth.json" in name or ".sqlite" in name for name in names)
 
@@ -65,6 +66,11 @@ def main():
             check=True,
         )
         assert json.loads(result.stdout)["tasks"] == []
+        subprocess.run(
+            [str(cli), "desktop", "install-skill", "--config", str(config), "--directory", str(work / "skills")],
+            cwd=work, check=True, stdout=subprocess.DEVNULL,
+        )
+        assert (work / "skills/oss-contributor/SKILL.md").is_file()
     print("Fresh wheel install, CLI, empty state, license and runtime resources: passed")
 
 

@@ -6,7 +6,9 @@ import pytest
 from conftest import BASE, FIX, REGRESSION
 
 from oss_contributor.config import Config, Repository
+from oss_contributor.desktop import Desktop, Handoff
 from oss_contributor.engine import Engine
+from oss_contributor.models import Assessment, Repair
 from oss_contributor.process import ContributorError
 from oss_contributor.sandbox import DockerSandbox
 from oss_contributor.store import Store
@@ -73,6 +75,32 @@ def test_real_docker_isolation_traversal_symlinks_and_offline_network():
         box.command(["python", "-c", "import os; os.symlink('/etc/passwd','escape')"])
         with pytest.raises(ContributorError, match="rejected"):
             box.tool("repo_read", {"path": "escape"})
+
+
+def test_native_handoff_uses_real_clean_docker_without_cli_model(rig):
+    from pathlib import Path
+
+    config, store, github, codex, _ = rig
+    config.limits.task_seconds = 90
+    desktop = Desktop(Engine(config, store, github, codex, DockerSandbox))
+    action = desktop.tick()
+    assert action["action"] == "dispatch"
+    desktop.attach(action["ticket"], "fixture-native-chat")
+    handoff = Handoff(
+        ticket=action["ticket"], outcome="fixed",
+        assessment=Assessment(suitable=True, reason="small arithmetic bug", evidence=["wrong operator"],
+                              reproduction="add(2,3)", expected_scope=["calc.py"], validation="pytest"),
+        repair=Repair(summary="Use addition", root_cause="subtraction operator", evidence=["regression"]),
+        changes={"calc.py": FIX, "tests/test_oss_regression_1.py": REGRESSION},
+    )
+    path = Path(action["handoff_path"])
+    path.write_text(handoff.model_dump_json())
+    desktop.finish(action["ticket"], path)
+    task = store.get(action["task_id"])
+    assert task["status"] == "open", task["data"].get("reason")
+    assert [cmd["code"] for cmd in task["data"]["report"]["commands"]] == [0, 1, 0, 0]
+    assert not codex.calls
+    assert len(github.published) == 1  # GitHub boundary remains simulated.
 
 
 def test_installation_network_allows_pypi_and_denies_other_hosts():
