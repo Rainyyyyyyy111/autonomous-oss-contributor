@@ -12,6 +12,8 @@ revisions_per_pr = 2
 open_prs = 3
 max_files = 5
 max_lines = 200
+publication_recovery_attempts = 5
+publication_recovery_seconds = 86400
 
 [discovery]
 min_stars = 500

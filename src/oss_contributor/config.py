@@ -23,6 +23,8 @@ class Limits(StrictModel):
     open_prs: int = Field(3, ge=1, le=20)
     max_files: int = Field(5, ge=2, le=20)
     max_lines: int = Field(200, ge=1, le=2000)
+    publication_recovery_attempts: int = Field(5, ge=1, le=100)
+    publication_recovery_seconds: int = Field(86400, ge=1)
 
 
 class Discovery(StrictModel):
@@ -127,6 +129,8 @@ revisions_per_pr = 2
 open_prs = 3
 max_files = 5
 max_lines = 200
+publication_recovery_attempts = 5
+publication_recovery_seconds = 86400
 
 [discovery]
 min_stars = 500

@@ -245,10 +245,10 @@ def prepare_environments(config: ConfigOption = None, build_runner: bool = typer
 
 @app.command()
 def pause(config: ConfigOption = None):
-    """Stop new model calls and publication; the current bounded tool call may finish."""
+    """Block writes and request native cancellation; retain reservations until confirmed stopped."""
     store = Store(load(config))
     try:
-        store.set_meta("paused", "paused by user")
+        store.pause("paused by user")
         emit({"paused": True})
     finally:
         store.close()

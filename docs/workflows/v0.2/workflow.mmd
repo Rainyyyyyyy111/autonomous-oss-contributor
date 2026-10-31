@@ -1,0 +1,27 @@
+flowchart TD
+    CONFIG["一次配置：保留授权范围、预算与隔离契约"] --> TICK["调度：读取持久任务、原生票据及发布意图"]
+    TICK --> PAUSE{"暂停或正在取消？"}
+    PAUSE -->|活动聊天| CANCEL["持久取消；要求原生停止确认<br/>保留预算与串行位；resume 不能绕过"]
+    CANCEL -->|已确认停止| END["幂等结算；保留终态与原因"]
+    PAUSE -->|暂停且无活动聊天| WAIT["按后续调度恢复；不重置预算"]
+    PAUSE -->|否| RECOVER{"已有发布意图？"}
+    RECOVER -->|是| LIMIT{"次数、窗口、额度和退避允许？"}
+    LIMIT -->|等待| WAIT
+    LIMIT -->|累计上限耗尽| ATTENTION["需要关注；保留意图与证据"]
+    LIMIT -->|允许| INTENT["先持久化恢复计数；再核对远端"]
+    RECOVER -->|否| WORK["按既有范围观察 PR 或筛选新任务<br/>政策、归属、预算与环境预检后修复"]
+    WORK --> HANDOFF["确认聊天停止；严格审查 Handoff"]
+    HANDOFF --> VERIFY["独立红绿复验及完整检查<br/>绑定基准、补丁、配置与验收版本"]
+    VERIFY -->|通过| FRESH{"发布前刷新政策、版本与摘要"}
+    VERIFY -->|失败| ATTENTION
+    INTENT --> FRESH
+    FRESH -->|旧报告或输入变化| REVERIFY["重新独立验证"]
+    REVERIFY -->|失败| ATTENTION
+    REVERIFY -->|通过| WRITE
+    FRESH -->|匹配| WRITE["条件更新状态；真实 API 写前复查<br/>查重发布或更新同一 PR"]
+    WRITE -->|异常或响应不确定| WAIT
+    WRITE -->|记录实际结果，不覆盖停止终态| OBSERVE["观察当前 Head 的 CI 与维护者反馈"]
+    OBSERVE -->|有效反馈且额度允许| WORK
+    OBSERVE -->|pending 或授权等待| WAIT
+    OBSERVE -->|合并、关闭或停止| END
+    WAIT --> TICK

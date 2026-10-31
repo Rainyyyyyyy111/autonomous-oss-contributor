@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Apply Workflow v0.2 controls: bind independent validation to patch/configuration inputs; revalidate legacy or stale source evidence; bound publication recovery with persistent attempts, a time window and capped backoff; persist native cancellation across pause/resume; preserve terminal states around publication. See [CHG-20261031-002](docs/workflows/changes/2026-10-31-002-workflow-controls.md). The full phase-queue design remains a documented proposal.
+
 - Establish Workflow v0.1 as a separate, archived process baseline with diagrams, stage/evidence mapping, default rules, metric definitions, source hashes and a Git locator. Add per-batch change records, an index, a template and contributor/agent documentation conventions.
 
 - Add bug-first discovery with an unlabelled fallback, explainable candidate ranking, configurable issue triage cooldown and assignment deferral. Both native and standalone scheduling retain full eligibility checks and unchanged budgets.

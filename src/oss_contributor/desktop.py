@@ -395,6 +395,8 @@ class Desktop:
             if active and active["state"] == "cancelling":
                 return self.cancellation(active)
             if self.store.meta("paused"):
+                if active:
+                    return self.fail(active["ticket"], "paused: stop active native execution")
                 return self.result(reason=self.store.meta("paused"))
             if time.time() < float(self.store.meta("github_retry_after", "0")):
                 return self.result(reason="GitHub server-requested backoff")
@@ -910,7 +912,9 @@ class Desktop:
             if isinstance(exc, PublicationConflict):
                 if job["state"] not in {"complete", "failed"}:
                     self.settle(job, "failed")
-                self.store.update(task["id"], "needs_attention", reason=str(exc))
+                self.store.transition(task["id"],
+                                      ("desktop_pending", "desktop_running", "desktop_validating", "validated", "publishing"),
+                                      "needs_attention", reason=str(exc))
                 self.store.notify(
                     f"conflict:{ticket}", kind="needs_attention", task=task["id"], reason=str(exc)
                 )

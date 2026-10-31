@@ -231,9 +231,23 @@ class Engine:
                 if validated != accepted:
                     raise ContributorError("validation mutated the candidate patch")
             report.passed = True
+            report.evidence_digest = self.validation_digest(repo, sha, accepted, path)
         except ContributorError as exc:
             report.failure = str(exc)
         return report
+
+    def validation_digest(self, repo: Repository, sha: str, changes: dict, path: str) -> str:
+        """Bind controller evidence to its inputs; this is not a worker attestation."""
+        inputs = {
+            "validator": "independent-red-green-v1",
+            "repository": repo.model_dump(),
+            "base_sha": sha,
+            "changes": changes,
+            "regression_path": path,
+            "max_files": self.config.limits.max_files,
+            "max_lines": self.config.limits.max_lines,
+        }
+        return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
     def process(self, task: dict, revision_events: list | None = None):
         deadline = time.monotonic() + self.config.limits.task_seconds
@@ -406,7 +420,8 @@ class Engine:
         except RateLimited:
             raise
         except PublicationConflict as exc:
-            self.store.update(task_id, "needs_attention", reason=str(exc))
+            self.store.transition(task_id, ("running", "revising", "validated", "publishing"),
+                                  "needs_attention", reason=str(exc))
         except (ContributorError, OSError, ValueError) as exc:
             if report is not None and not report.passed:
                 report.failure = str(exc)
@@ -503,22 +518,41 @@ class Engine:
             raise PublicationConflict("new feedback arrived during description revision")
         if remote.waiting:
             raise PublicationConflict("CI must settle before description update: " + remote.waiting)
-        self.store.update(ident, "publishing")
+        if not self.store.transition(ident, ("validated", "publishing"), "publishing"):
+            raise PublicationConflict("task changed before description publication")
+        self.ensure_unpaused()
         self.github.update_pr_body(
             task["repo"], pr["number"], data["description_body"], pr["head_sha"],
             data["description_previous_body"],
         )
         self.store.mark_seen(ident, data["pending_events"])
         self.learning.export_best_effort()
-        self.store.update(ident, "open", reason="", waiting="", publication_kind="source")
+        self.store.transition(ident, ("publishing",), "open", reason="", waiting="", publication_kind="source")
 
     def publish(self, task: dict, deadline: float):
-        with self.github.bounded(deadline) if isinstance(self.github, GitHub) else nullcontext():
-            self._publish(task, deadline)
+        previous = self.github.before_write if isinstance(self.github, GitHub) else None
+        def before_write():
+            self.ensure_unpaused()
+            current = self.store.get(task["id"])
+            self.ensure_task_scope(current)
+            if current["status"] not in {"validated", "publishing", "open"}:
+                raise PublicationConflict("task stopped before external write")
+        if isinstance(self.github, GitHub):
+            self.github.before_write = before_write
+        try:
+            with self.github.bounded(deadline) if isinstance(self.github, GitHub) else nullcontext():
+                self._publish(task, deadline)
+        finally:
+            if isinstance(self.github, GitHub):
+                self.github.before_write = previous
 
     def _publish(self, task: dict, deadline: float):
         self.ensure_unpaused()
+        # Callers may retain a snapshot from before a stop or an observer update.
+        task = self.store.get(task["id"])
         self.ensure_task_scope(task)
+        if task["status"] in {"stopped", "closed", "merged", "failed", "skipped", "needs_attention"}:
+            raise PublicationConflict("task is no longer eligible for publication")
         repo = self.config.repository(task["repo"])
         if repo is None:
             raise PublicationConflict("publication denied: repository removed from allowlist")
@@ -555,17 +589,27 @@ class Engine:
         if reason:
             raise PublicationConflict(f"pre-publication check: {reason}")
         if data.get("publication_kind") == "description":
+            if (data["report"].get("base_sha") != data["base_sha"]
+                or data["report"].get("evidence_digest") != self.validation_digest(
+                    repo, data["base_sha"], data["changes"], data["regression_path"])):
+                raise PublicationConflict("description update requires matching validation evidence")
             self._publish_description(task)
             return
         base_branch, latest_sha = self.github.base(task["repo"])
-        if latest_sha != data["base_sha"]:
+        expected_digest = self.validation_digest(
+            repo, data["base_sha"], data["changes"], data["regression_path"]
+        )
+        if (latest_sha != data["base_sha"]
+            or data["report"].get("base_sha") != data["base_sha"]
+            or data["report"].get("evidence_digest") != expected_digest):
             latest = self.github.snapshot(task["repo"], latest_sha)
             self.ensure_patch_fits(latest, data)
             report = self.validate(
                 repo, latest, data["changes"], data["regression_path"], latest_sha, deadline
             )
             if not report.passed:
-                raise ContributorError(
+                self.store.update(task_id, last_attempt_report=report.model_dump())
+                raise PublicationConflict(
                     "patch failed verification on updated upstream: " + report.failure
                 )
             self.store.update(
@@ -609,7 +653,12 @@ class Engine:
                 raise PublicationConflict("new feedback arrived before revision publication")
             if current.waiting:
                 raise PublicationConflict("CI evidence changed before revision publication: " + current.waiting)
-        self.store.update(task_id, "publishing", publication_branch=branch_name)
+        if not self.store.transition(task_id, ("validated", "publishing", "open"),
+                                     "publishing", publication_branch=branch_name):
+            raise PublicationConflict("task changed before publication")
+        self.ensure_unpaused()
+        if self.store.get(task_id)["status"] != "publishing":
+            raise PublicationConflict("task stopped before publication")
         result = self.github.publish(
             task["repo"],
             base_branch,
@@ -620,11 +669,16 @@ class Engine:
             self.body(task),
             previous_head=(data.get("pr") or {}).get("head_sha"),
         )
-        self.store.update(task_id, "open", pr=result, reason="", waiting="")
+        if not self.store.transition(task_id, ("publishing",), "open", pr=result, reason="", waiting=""):
+            # An already-issued remote write may complete after a stop. Retain its result,
+            # without reopening the locally terminal task.
+            self.store.update(task_id, pr=result)
         self.store.mark_seen(task_id, data.get("pending_events", []))
         self.learning.export_best_effort()
 
     def recover(self, task_ids: set[int] | None = None):
+        if self.store.meta("paused") or time.time() < float(self.store.meta("github_retry_after", "0")):
+            return
         if task_ids is None:
             scope = json.loads(
                 self.store.meta("desktop_scope", '{"mode":"autopilot","targets":[]}')
@@ -646,15 +700,36 @@ class Engine:
                 return
             if time.time() < task["data"].get("next_reconcile", 0):
                 continue
+            now = time.time()
+            data = task["data"]
+            started = data.get("reconcile_started", now)
+            attempts = data.get("reconcile_attempts", 0)
+            if (attempts >= self.config.limits.publication_recovery_attempts
+                or now - started >= self.config.limits.publication_recovery_seconds):
+                reason = "publication recovery limit reached; reconcile external effects before resuming"
+                self.store.transition(task["id"], ("validated", "publishing"),
+                                      "needs_attention", reason=reason)
+                self.store.notify(f"recovery-limit:{task['id']}", kind="needs_attention",
+                                  task=task["id"], reason=reason)
+                continue
+            # Waiting for a daily allowance does not consume a recovery attempt.
+            if (not data.get("pr") and not data.get("publication_reserved")
+                and self.store.usage()["publications"] >= self.config.limits.prs_per_day):
+                continue
+            # Persist before external operations, including retries whose response is lost.
+            self.store.update(task["id"], reconcile_started=started,
+                              reconcile_attempts=attempts + 1)
             try:
                 self.publish(task, time.monotonic() + self.config.limits.task_seconds)
             except RateLimited:
                 raise
             except PublicationConflict as exc:
-                self.store.update(task["id"], "needs_attention", reason=str(exc))
+                self.store.transition(task["id"], ("validated", "publishing"),
+                                      "needs_attention", reason=str(exc))
             except (ContributorError, OSError, ValueError) as exc:
                 # Preserve publication intent so a transient failure can reconcile next time.
-                self.store.update(task["id"], reason=str(exc), next_reconcile=time.time() + 600)
+                self.store.update(task["id"], reason=str(exc),
+                                  next_reconcile=time.time() + min(3600, 600 * 2 ** min(attempts, 3)))
 
     def watch(self):
         scope = json.loads(self.store.meta("desktop_scope", '{"mode":"autopilot","targets":[]}'))

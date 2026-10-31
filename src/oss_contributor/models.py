@@ -76,6 +76,7 @@ class FeedbackPlan(StrictModel):
 
 class ValidationReport(StrictModel):
     base_sha: str
+    evidence_digest: str = ""
     passed: bool = False
     commands: list[CommandResult] = []
     failure: str = ""

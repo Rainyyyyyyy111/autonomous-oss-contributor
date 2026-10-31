@@ -1,0 +1,93 @@
+flowchart TB
+    CONFIG["一次配置并授权<br/>仓库白名单、命令与权限、隔离策略<br/>预算、重试上限、超时、验收规则"]
+    START["加载持久化任务账本<br/>恢复检查点，核对未确认的外部操作"]
+    CONFIG --> START --> QUEUE
+
+    subgraph CONTROL["统一调度：所有阶段均经过准入"]
+        QUEUE["持久化任务队列<br/>由事件或 next_run_at 唤醒<br/>首次登记发现任务"]
+        LOCK{"唯一任务键去重<br/>能否取得有效租约？"}
+        GUARD{"阶段准入<br/>授权与范围、停止标记<br/>累计预算、尝试次数、任务及等待期限"}
+        RESERVE["原子预留阶段额度<br/>同时检查全局、仓库、任务预算<br/>保留验证与收尾额度"]
+        ROUTE{"读取已记录的下一阶段"}
+        COMMIT["持有效租约提交结果与证据<br/>记录下一阶段及下次执行时间<br/>结算阶段预算，释放租约"]
+        QUEUE --> LOCK
+        LOCK -->|取得| GUARD
+        LOCK -->|已被占用| WAIT
+        GUARD -->|通过| RESERVE
+        GUARD -->|暂缺授权或等待周期额度| WAIT
+        GUARD -->|累计预算、次数或期限耗尽| CLOSE
+        GUARD -->|禁止执行| CLOSE
+        GUARD -->|已停止| STOP
+        RESERVE -->|成功| ROUTE
+        RESERVE -->|并发竞争导致额度不足| WAIT
+        COMMIT --> QUEUE
+    end
+
+    subgraph WORK["执行阶段：完成后保存进度，再次经过准入"]
+        DISCOVER["白名单内发现与筛选<br/>先查政策、归属、重复、冷却期<br/>再按影响、证据与总成本排序"]
+        REPAIR["固定基准与验收条件<br/>隔离环境中复现、修复并生成补丁<br/>聊天只作执行载体，不重置任务预算"]
+        VERIFY["干净环境独立复验<br/>验收标准有独立来源，检查测试未被削弱<br/>记录基准、补丁、规则及环境版本"]
+        VERDICT{"目标问题与回归检查<br/>是否满足验收要求？"}
+        PREFLIGHT{"发布前核对<br/>验证证据是否仍有效？<br/>基准、补丁与待发布版本是否一致？"}
+        PUBLISH["持久化发布意图，查询已有 PR 去重<br/>写前重查权限、停止标记与有效租约<br/>发布或更新对应提交的 PR"]
+        WATCH["跟进对应提交的 CI 与维护者事件<br/>核验反馈身份、适用版本与任务范围"]
+        EVENT{"当前有效事件"}
+
+        ROUTE -->|发现| DISCOVER
+        DISCOVER -->|登记唯一候选：修复；安排下次发现| COMMIT
+        ROUTE -->|修复| REPAIR
+        REPAIR -->|阶段设为复验| COMMIT
+        ROUTE -->|复验| VERIFY
+        VERIFY --> VERDICT
+        VERDICT -->|通过：阶段设为发布| COMMIT
+        VERDICT -->|失败| ERROR
+        ROUTE -->|发布| PREFLIGHT
+        PREFLIGHT -->|失效或版本变化：作废证据，回到修复| COMMIT
+        PREFLIGHT -->|一致且有效| PUBLISH
+        PUBLISH -->|阶段设为跟进| COMMIT
+        ROUTE -->|跟进| WATCH
+        WATCH --> EVENT
+        EVENT -->|可执行且已授权的修改反馈：回到修复| COMMIT
+        EVENT -->|基准或补丁改变：作废证据，回到修复| COMMIT
+        EVENT -->|CI 失败| ERROR
+        EVENT -->|pending 或暂无有效新事件| WAIT
+        EVENT -->|合并或关闭| CLOSE
+        EVENT -->|有效停止请求| STOP
+    end
+
+    subgraph RECOVERY["异常恢复与有界等待"]
+        ERROR["任一阶段报错、超时或进程中断"]
+        RECON["接管恢复租约，隔离旧执行<br/>核对账本、补丁、PR 与 CI 的实际结果<br/>写入结果不确定时，先确认再重试"]
+        CAUSE{"结果与原因分类"}
+        BACKOFF["保留原阶段并递增尝试计数<br/>按上限与退避策略安排重试"]
+        WAIT["记录等待原因、唤醒条件与期限<br/>结算已用预算，安全释放本次租约<br/>避免持续轮询"]
+        ERROR --> RECON --> CAUSE
+        CAUSE -->|操作已成功：按实际结果推进| COMMIT
+        CAUSE -->|可恢复的基础设施失败| BACKOFF
+        CAUSE -->|质量失败：递增返修计数，回到修复| COMMIT
+        CAUSE -->|仍在期限内的外部等待| WAIT
+        CAUSE -->|无法安全恢复或等待超时| CLOSE
+        BACKOFF --> WAIT
+        WAIT -->|事件或到期唤醒，重新准入| QUEUE
+        ROUTE -.->|所有阶段共用异常处理| ERROR
+    end
+
+    subgraph FINISH["停止、收尾与反馈"]
+        STOP_EVENT["任意阶段收到有效停止请求<br/>按任务、仓库或全局作用域处理"]
+        STOP["先持久化停止标记并撤销执行租约<br/>停止派发，取消运行，禁止后续写入<br/>核对正在发生的外部操作"]
+        CLOSE["标记终态并撤销租约<br/>核对结果，结算预算，释放资源<br/>归档证据与原因，阻止旧事件重新启动"]
+        LEARN["形成带来源的反馈与规则版本<br/>仅在配置范围内调整排序与检查建议<br/>不扩大权限、预算，不降低验收要求"]
+        STOP_EVENT --> STOP --> CLOSE --> LEARN
+        LEARN -.->|影响后续候选排序| DISCOVER
+    end
+
+    classDef config fill:#e8eaf6,stroke:#5c6bc0,color:#172554;
+    classDef control fill:#eff6ff,stroke:#3b82f6,color:#172554;
+    classDef work fill:#f0fdf4,stroke:#22c55e,color:#14532d;
+    classDef recovery fill:#fffbeb,stroke:#f59e0b,color:#78350f;
+    classDef stop fill:#fff1f2,stroke:#f43f5e,color:#881337;
+    class CONFIG,START config;
+    class QUEUE,LOCK,GUARD,RESERVE,ROUTE,COMMIT control;
+    class DISCOVER,REPAIR,VERIFY,VERDICT,PREFLIGHT,PUBLISH,WATCH,EVENT work;
+    class ERROR,RECON,CAUSE,BACKOFF,WAIT recovery;
+    class STOP_EVENT,STOP,CLOSE stop;

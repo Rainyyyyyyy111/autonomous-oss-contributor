@@ -170,6 +170,33 @@ class Store:
             else {"day": self.day(), "attempts": 0, "publications": 0, "model_seconds": 0}
         )
 
+    def transition(self, task_id: int, allowed: tuple[str, ...], status: str, **data) -> bool:
+        """An observed terminal state or concurrent update must not be overwritten."""
+        task = self.get(task_id)
+        task["data"].update(data)
+        with self.db:
+            cursor = self.db.execute(
+                "UPDATE tasks SET status=?,data=?,updated=? WHERE id=? AND updated=? "
+                "AND status IN (" + ",".join("?" for _ in allowed) + ")",
+                (status, json.dumps(task["data"]), time.time(), task_id, task["updated"], *allowed),
+            )
+        if cursor.rowcount:
+            self.event(task_id, status, data)
+        return bool(cursor.rowcount)
+
+    def pause(self, reason: str):
+        """Persist cancellation with pause, so an immediate resume cannot revive a chat."""
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO meta VALUES('paused',?)", (reason,))
+            for job in self.desktop_jobs():
+                if job["data"].get("thread_stopped") or job["state"] == "cancelling":
+                    continue
+                job["data"]["stop_reason"] = reason
+                self.db.execute(
+                    "UPDATE desktop_jobs SET state='cancelling',data=? WHERE ticket=?",
+                    (json.dumps(job["data"]), job["ticket"]),
+                )
+
     def reserve(self, kind: str, amount: float = 1) -> bool:
         caps = {
             "attempts": self.config.limits.attempts_per_day,
