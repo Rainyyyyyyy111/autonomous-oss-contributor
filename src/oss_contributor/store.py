@@ -47,6 +47,12 @@ class Store:
             decision TEXT NOT NULL DEFAULT 'pending', created REAL NOT NULL);
           CREATE TABLE IF NOT EXISTS notification_alerts(
             notification INTEGER PRIMARY KEY, delivered REAL NOT NULL);
+          CREATE TABLE IF NOT EXISTS feedback_memory(
+            task INTEGER NOT NULL, event TEXT NOT NULL, data TEXT NOT NULL,
+            first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+            PRIMARY KEY(task,event));
+          CREATE TABLE IF NOT EXISTS pr_outcomes(
+            task INTEGER PRIMARY KEY, data TEXT NOT NULL, observed REAL NOT NULL);
         """)
 
     def close(self):
@@ -123,6 +129,12 @@ class Store:
                 ),
             )
             return cursor.lastrowid if cursor.rowcount else None
+
+    def discovery_evidence(self, task_id: int, evidence: dict):
+        """Refresh only cheap search evidence on queued tasks, preserving repair/publication state."""
+        task = self.get(task_id)
+        if task["status"] == "queued" and task["data"].get("discovery") != evidence:
+            self.update(task_id, discovery=evidence)
 
     def get(self, task_id: int) -> dict:
         row = self.db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()

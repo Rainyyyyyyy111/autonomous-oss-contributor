@@ -88,6 +88,11 @@ class ReviewEvent(StrictModel):
     id: str
     body: str
     kind: Literal["review", "ci"] = "review"
+    url: str = ""
+    author: str = ""
+    commit_sha: str = ""
+    path: str = ""
+    review_state: str = ""
 
 
 class PRState(StrictModel):
@@ -97,9 +102,13 @@ class PRState(StrictModel):
     head_sha: str
     body: str = ""
     events: list[ReviewEvent] = []
+    feedback_history: list[ReviewEvent] = []
     waiting: str = ""
     stop: bool = False
     ci: list[dict[str, Any]] = []
+    created_at: str = ""
+    closed_at: str = ""
+    merged_at: str = ""
 
 
 class NotificationBatch(StrictModel):

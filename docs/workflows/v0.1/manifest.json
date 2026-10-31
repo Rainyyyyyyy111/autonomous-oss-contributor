@@ -1,0 +1,240 @@
+{
+  "workflow_version": "0.1",
+  "baseline_date": "2026-10-31",
+  "timezone": "Asia/Singapore",
+  "captured_at": "2026-10-31T14:59:38.160855+08:00",
+  "package_version": "0.3.0a1",
+  "git_locator": "workflow-v0.1",
+  "based_on_head_before_baseline_commit": "a863e51879322a2ca545906b52d4d16a97ccd259",
+  "capture_note": "File hashes captured from the working tree before the baseline commit. The workflow-v0.1 tag locates the archived implementation and documents. This manifest is an integrity inventory, not a source backup.",
+  "files": [
+    {
+      "path": "config.example.toml",
+      "sha256": "a463f0f7c37e14b4048c5e4445607d15d2c85b5234b26c353fc9255f6ee7e6f6",
+      "bytes": 968
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "07b51fd058b25af7da19ff0daf3b80835c2776a21bd5c9bdd19d7a73f0c61ecf",
+      "bytes": 1808
+    },
+    {
+      "path": "scripts/smoke_wheel.py",
+      "sha256": "3300ab9732309e8ca6fc9b50183777d55043cc762876ee0d733278d7bae305e2",
+      "bytes": 4391
+    },
+    {
+      "path": "src/oss_contributor/__init__.py",
+      "sha256": "a65bb47d9bbfa42af81541cb952dde99a90bbde699bf0d5064c641acaa426c73",
+      "bytes": 59
+    },
+    {
+      "path": "src/oss_contributor/cli.py",
+      "sha256": "cfc83312af631751bdf84de13793719684b7b7f62d78f0d8400fee62898a7e9a",
+      "bytes": 18769
+    },
+    {
+      "path": "src/oss_contributor/codex.py",
+      "sha256": "2c7275edb903f50f97444c87ed5fdc01d2a5ba2351280e8eba33bd1eadff0d8d",
+      "bytes": 16478
+    },
+    {
+      "path": "src/oss_contributor/config.py",
+      "sha256": "da3f7dbd85ac230024467589eea0dad3e422fb3a44253e0092d856da3f069aca",
+      "bytes": 5051
+    },
+    {
+      "path": "src/oss_contributor/dashboard.py",
+      "sha256": "259d7de435848d82386231767af5ef929a51217667bc14452a1e0b5097a60bda",
+      "bytes": 6679
+    },
+    {
+      "path": "src/oss_contributor/desktop.py",
+      "sha256": "d487ebd074c76d969d4d100405d6f303a6b9ce64bed80e294e9dab59ce7b5b64",
+      "bytes": 46628
+    },
+    {
+      "path": "src/oss_contributor/engine.py",
+      "sha256": "a5874b1ec56ae6acd991aa5fbae416f18a55c8e2ef65918aba5800ed044922d2",
+      "bytes": 33623
+    },
+    {
+      "path": "src/oss_contributor/environments.py",
+      "sha256": "f36804c4d448ad44972eb7d4356208d0d9351443aa476edcfa915ac54fce9928",
+      "bytes": 2507
+    },
+    {
+      "path": "src/oss_contributor/github.py",
+      "sha256": "41855f27d81ac69654d3f88696751388fb69400d32bdb77a6dcce1ac65aa624d",
+      "bytes": 26576
+    },
+    {
+      "path": "src/oss_contributor/installation.py",
+      "sha256": "968070a3115ddd3a81ea3e7863f69df6614c94be83454864b609c3ece90bfd54",
+      "bytes": 4428
+    },
+    {
+      "path": "src/oss_contributor/learning.py",
+      "sha256": "1bbf1ade45597907b68f641462724c42f09431930391ea686bffd3d718710e21",
+      "bytes": 11379
+    },
+    {
+      "path": "src/oss_contributor/models.py",
+      "sha256": "04ae64b9bba516d27edf38e8b757b807ba299cf85008e4a0f35b781fdb1f7931",
+      "bytes": 2931
+    },
+    {
+      "path": "src/oss_contributor/notification_service.py",
+      "sha256": "e91bf4ab6cbb66da0d439b27fd17e4a6ff4c3fdf152665615f03590e57faf2bf",
+      "bytes": 3922
+    },
+    {
+      "path": "src/oss_contributor/notifications.py",
+      "sha256": "1c1040cf49424a22471f171de798865ea98b5c1312cdfb77003d823db4c2545f",
+      "bytes": 11845
+    },
+    {
+      "path": "src/oss_contributor/process.py",
+      "sha256": "69eb565a994e959a5db5198e1d4141c8514adf58b804fea0f0d880a805fb6285",
+      "bytes": 3691
+    },
+    {
+      "path": "src/oss_contributor/runtime/Dockerfile",
+      "sha256": "6ad62ccb6e548786ff0edc24f005e01e4001eacd37f6a7227020f58c6c6e0b7f",
+      "bytes": 587
+    },
+    {
+      "path": "src/oss_contributor/runtime/bridge.py",
+      "sha256": "83995adae98e3ed4470f3ea49a1a374bdefaf82aa8eb8484aa7b5a6e3ecac58b",
+      "bytes": 5008
+    },
+    {
+      "path": "src/oss_contributor/runtime/proxy.py",
+      "sha256": "23510dcbc1972835d97ff7df10fa4af8ef8687e5ff55bdde78bbb22a23cca269",
+      "bytes": 1799
+    },
+    {
+      "path": "src/oss_contributor/safety.py",
+      "sha256": "e5044c8910a57312f0533e0a248678a5b12ea182757f869f426bcbe622b4771d",
+      "bytes": 8592
+    },
+    {
+      "path": "src/oss_contributor/sandbox.py",
+      "sha256": "06f047f37251880c4dd53f26a08780dc79c38eac16babeb226e414b79cc9bd6a",
+      "bytes": 12832
+    },
+    {
+      "path": "src/oss_contributor/selection.py",
+      "sha256": "8df39630999e09580daccc8ffae3d8fc725f849bdf79871621747ac5c7503e36",
+      "bytes": 3979
+    },
+    {
+      "path": "src/oss_contributor/skills/oss-contributor/SKILL.md",
+      "sha256": "9106b7a26c723d3832118b14cebc7d2d77c0715d458cba021ad4f6fd90063aab",
+      "bytes": 8825
+    },
+    {
+      "path": "src/oss_contributor/skills/oss-contributor/agents/openai.yaml",
+      "sha256": "21a131fee5e28b62d5a2cf38e29b0b18257625f64539756724f8e0ad2752da2a",
+      "bytes": 341
+    },
+    {
+      "path": "src/oss_contributor/store.py",
+      "sha256": "f5d5c46e81ef6eb66527267310a661d8ec29394410d45d988998799ac5c432cc",
+      "bytes": 10893
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "73f5c000ee367e8a6693e3be8207bac202a636dd2bd8bbdb24b2bae0c1c6b318",
+      "bytes": 7027
+    },
+    {
+      "path": "tests/test_desktop.py",
+      "sha256": "c1004da387954e9d9a2bb5cffc65792de7b52b618a92e322f4d6add4666e05d1",
+      "bytes": 18102
+    },
+    {
+      "path": "tests/test_docker.py",
+      "sha256": "6eef279e9350b4892406bad08bbd522a4c69a90b472c4f80854e79cad5afe362",
+      "bytes": 6281
+    },
+    {
+      "path": "tests/test_engine.py",
+      "sha256": "3cc9a7381951a6324ba8ccd61e86e44f25b87262f6b5a4f5fba72ac995e01984",
+      "bytes": 10255
+    },
+    {
+      "path": "tests/test_feedback.py",
+      "sha256": "87e041b56599c9ce54a34bce41df25dbcc241630167dc5be13fe9903f4e74afe",
+      "bytes": 9984
+    },
+    {
+      "path": "tests/test_github.py",
+      "sha256": "d2fbd9eed4c76ad931eb6f6d4679b7479cf8a3824cedd83ed80ae29650406898",
+      "bytes": 11926
+    },
+    {
+      "path": "tests/test_learning.py",
+      "sha256": "bb68bbe1742b2982cfd424e83e5a6bfb66e1509bc1c3d2e5b5b6198f324707fe",
+      "bytes": 8661
+    },
+    {
+      "path": "tests/test_live_codex.py",
+      "sha256": "af37ddb16596592c193473572e13575798b5b30d75199fb45a6a7ff01b28dfcd",
+      "bytes": 963
+    },
+    {
+      "path": "tests/test_notification_service.py",
+      "sha256": "e1a52285044cfb5cf294eb05d1d9e3b1a684f8824010fd4972041021e3d45059",
+      "bytes": 4418
+    },
+    {
+      "path": "tests/test_notifications.py",
+      "sha256": "3ad72ae735ac880a236bf91fe0a84584ce5c64f28295898ba8ad5df3175aa224",
+      "bytes": 14090
+    },
+    {
+      "path": "tests/test_product_tools.py",
+      "sha256": "da647c0328c4c8ca9d65e6a559f9171a21e47e92fa145b31f6cd14c9c12734ba",
+      "bytes": 5944
+    },
+    {
+      "path": "tests/test_protocol_cli_store.py",
+      "sha256": "f01c77709b16dec3c083c0a752c04be018b239ffaf6066f0148e3e559bd36db6",
+      "bytes": 4787
+    },
+    {
+      "path": "tests/test_reliability.py",
+      "sha256": "2c0e72080ecb66bb30a07881cd3b05d28a1fa63a23822d996990dcd0055e4221",
+      "bytes": 12345
+    },
+    {
+      "path": "tests/test_safety.py",
+      "sha256": "9e69bcce7eeda394bef9d256d7168bacf48e7b4d07e810a306c8f15c0a8cd04c",
+      "bytes": 4914
+    },
+    {
+      "path": "tests/test_selection.py",
+      "sha256": "e9eab645ca36313d238e8f59857bc2f8f7458dea96901dd986b06e7c5733fb4d",
+      "bytes": 5418
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "33fcd5f7bb4bfdea53cc560b9a85bc5bf6eba309ef20519a3da6133f3a95ee33",
+      "bytes": 114114
+    }
+  ],
+  "prior_implementation_verification": {
+    "default_suite": {
+      "passed": 242,
+      "skipped": 6
+    },
+    "real_docker_suite": {
+      "passed": 5
+    },
+    "ruff": "passed",
+    "mypy": "passed",
+    "build_and_fresh_wheel_smoke": "passed",
+    "provenance": "Reported in the preceding implementation turn; not rerun for this documentation batch."
+  }
+}

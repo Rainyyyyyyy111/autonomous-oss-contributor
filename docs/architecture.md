@@ -12,6 +12,8 @@ The Python controller owns authorization, budgets, state transitions, verificati
 | `sandbox.py`, `runtime/` | Docker lifecycle, PyPI proxy, offline execution, bounded file bridge |
 | `safety.py` | Paths, archives, contribution evidence heuristics, patch and regression checks |
 | `engine.py` | Baseline → assessment → failing regression → repair → clean verification → publication → observation |
+| `selection.py`, `learning.py` | Explainable queue ordering, triage cooldown, versioned feedback evidence and observed PR outcomes; never new authorization or self-certified validation |
+| `environments.py`, `dashboard.py` | Local image readiness probes and offline scope-aware operational snapshots; no workspace snapshot reuse or web service |
 
 ## State and publication
 

@@ -33,6 +33,8 @@ Do not enable the live test in CI or upload credentials to make it pass. Do not 
 
 ## Pull requests
 
+Use the [workflow archive](docs/workflows/README.md) and [change-record template](docs/workflows/templates/change-record.md) to record each coherent change batch. Link its record ID in the PR and update both change indexes. Workflow/state/authority/budget/quality-gate/default-selection changes get a new workflow baseline; other fixes reference the current version. Preserve historical baselines and distinguish workflow numbering from package releases. Record actual verification and rollback requirements, including missing evidence.
+
 Explain the concrete problem, resulting behavior, and commands actually run. Add meaningful regression coverage for changes to state transitions, publication recovery and isolation boundaries. Documentation-only changes need only the relevant link/example checks.
 
 AI-assisted contributions are welcome when disclosed, reviewed by the submitter, and supported by actual validation. Submitting invented test results, unread generated patches, or repetitive speculative changes is not acceptable. Review and merge decisions remain with the maintainers.

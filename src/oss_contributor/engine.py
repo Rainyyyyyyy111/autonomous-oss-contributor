@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from .codex import Codex
 from .config import Config, Repository
 from .github import GitHub
+from .learning import LearningMemory
 from .models import (
     ACKNOWLEDGEMENT,
     FEEDBACK_GUIDANCE,
@@ -22,6 +23,7 @@ from .models import (
 from .process import ContributorError, PublicationConflict, QuotaExhausted, RateLimited
 from .safety import check_regression, eligibility, validate_changes
 from .sandbox import DockerSandbox
+from .selection import Selector
 from .store import Store
 
 OPEN = (
@@ -91,6 +93,8 @@ def check_junit(sandbox, expect_failure: bool):
 class Engine:
     def __init__(self, config: Config, store: Store, github=None, codex=None, sandbox_factory=None):
         self.config, self.store = config, store
+        self.learning = LearningMemory(store)
+        self.selector = Selector(store)
         self.github = github if github is not None else GitHub(config.timezone)
         if isinstance(self.github, GitHub):
             self.github.before_write = self.ensure_unpaused
@@ -111,13 +115,21 @@ class Engine:
         # Search is a source of candidates, never authorization.
         for repo in self.config.repositories:
             self.store.candidate(repo.name.lower(), {"allowlisted": True})
-            for number in self.github.issue_numbers(
-                repo.name, self.config.discovery.issues_per_repo
+            for evidence in self.github.issue_candidates(
+                repo.name, self.config.discovery.issues_per_repo,
+                self.config.discovery.include_unlabelled,
             ):
                 # Full evidence is deliberately refreshed when work starts.
-                self.store.create_task(
-                    Issue(repo=repo.name.lower(), number=number, title="pending inspection")
-                )
+                number = evidence["number"]
+                self.store.create_task(Issue(
+                    repo=repo.name.lower(), number=number,
+                    title=evidence["title"], body=evidence.get("body", ""),
+                    labels=evidence.get("labels", []), url=evidence.get("url", ""),
+                ))
+                task = self.store.db.execute(
+                    "SELECT id FROM tasks WHERE repo=? AND issue=?", (repo.name.lower(), number),
+                ).fetchone()
+                self.store.discovery_evidence(task[0], evidence)
         self.store.set_meta("last_discovery", str(time.time()))
         self.store.event(
             None,
@@ -238,6 +250,8 @@ class Engine:
         self.ensure_unpaused()
         revision = revision_events is not None
         if not revision:
+            if not self.selector.evaluate(task)["ready"]:
+                return
             active = self.active()
             if len(active) >= self.config.limits.open_prs or any(t["repo"] == name for t in active):
                 return
@@ -255,6 +269,9 @@ class Engine:
         if not revision and not self.store.reserve("attempts"):
             return
         self.store.update(task_id, "revising" if revision else "running", issue=issue.model_dump())
+        learning_context = "\nHistorical feedback checklist:\n" + json.dumps(
+            self.learning.context(name), ensure_ascii=False,
+        )
         report = None
         try:
             branch, sha = self.github.base(name)
@@ -276,10 +293,10 @@ class Engine:
                     remote = self.github.pr_state(name, task["data"]["pr"]["number"])
                     plan = self.model(
                         FeedbackPlan,
-                        FEEDBACK_GUIDANCE + "\n" + json.dumps({
+                        FEEDBACK_GUIDANCE + learning_context + "\n" + json.dumps({
                             "feedback": [e.model_dump() for e in revision_events or []],
                             "repair": task["data"]["repair"],
-                            "pr": remote.model_dump(),
+                            "pr": remote.model_dump(exclude={"feedback_history"}),
                         }, ensure_ascii=False),
                         worker, deadline,
                     )
@@ -297,6 +314,7 @@ class Engine:
                     assessment = self.model(
                         Assessment,
                         "Assess this issue. Inspect code using read/search tools. Return unsuitable if uncertain.\n"
+                        + learning_context + "\n"
                         + json.dumps(issue.model_dump(), ensure_ascii=False),
                         worker,
                         deadline,
@@ -314,6 +332,7 @@ class Engine:
                         f"Produce one NEW pytest regression file at {path}. It must import and test the real package, "
                         "contain meaningful assertions, fail with AssertionError on the original code, and not "
                         "modify source, environment, harness, filesystem or configuration.\n"
+                        + learning_context + "\n"
                         + json.dumps(
                             {"issue": issue.model_dump(), "assessment": assessment.model_dump()},
                             ensure_ascii=False,
@@ -339,6 +358,7 @@ class Engine:
                     "Write a concise factual summary (one or two sentences) and root cause (one sentence); "
                     "keep command logs and process assurances out of these fields. "
                     "If feedback cannot safely be addressed, make no changes and explain.\n"
+                    + learning_context + "\n"
                     + json.dumps(
                         {
                             "issue": issue.model_dump(),
@@ -489,6 +509,7 @@ class Engine:
             data["description_previous_body"],
         )
         self.store.mark_seen(ident, data["pending_events"])
+        self.learning.export_best_effort()
         self.store.update(ident, "open", reason="", waiting="", publication_kind="source")
 
     def publish(self, task: dict, deadline: float):
@@ -601,6 +622,7 @@ class Engine:
         )
         self.store.update(task_id, "open", pr=result, reason="", waiting="")
         self.store.mark_seen(task_id, data.get("pending_events", []))
+        self.learning.export_best_effort()
 
     def recover(self, task_ids: set[int] | None = None):
         if task_ids is None:
@@ -647,6 +669,7 @@ class Engine:
             if not pr:
                 continue
             remote = self.github.pr_state(task["repo"], pr["number"])
+            self.learning.observe(task, remote)
             if remote.state != "open":
                 self.store.update(task["id"], remote.state, reason="maintainer decision recorded")
                 continue
@@ -696,7 +719,9 @@ class Engine:
                 >= self.config.discovery.interval_seconds
             ):
                 self.discover()
-            for task in self.store.tasks(("queued",)):
+            for task in self.selector.queue(persist=True):
+                if not task["selection"]["ready"]:
+                    continue
                 if self.store.meta("paused"):
                     break
                 self.process(task)

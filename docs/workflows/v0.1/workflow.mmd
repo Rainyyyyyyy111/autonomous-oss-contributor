@@ -1,0 +1,33 @@
+flowchart TD
+    START["WF-01 一次配置：白名单、命令、预算、运行范围"] --> TICK["WF-02 调度：恢复任务、核对发布意图、优先跟进已有 PR"]
+    TICK --> GATE{"暂停、退避或活动聊天？"}
+    GATE -->|是| WAIT["等待或恢复同一聊天；取消须确认停止"]
+    WAIT --> TICK
+    GATE -->|否| SCOPE{"运行范围"}
+    SCOPE -->|固定 PR 监控| OBSERVE
+    SCOPE -->|全自动| DISCOVER["WF-03 发现 Python 项目；仅白名单仓库扫描 Issue"]
+    DISCOVER --> SELECT["WF-04 Bug 优先与未标标签补充；排序、冷却期、指派暂缓"]
+    SELECT --> ELIGIBLE{"WF-05 贡献政策、归属、CLA、额度通过？"}
+    ELIGIBLE -->|否| HOLD["记录跳过、等待或需要关注；保存原因"]
+    HOLD --> TICK
+    ELIGIBLE -->|是| ENV["WF-06 固定基准 SHA；镜像与空容器隔离预检；预留额度"]
+    ENV --> CHAT["WF-07 创建全新原生 Codex 聊天；持久绑定票据与游标"]
+    CHAT --> WORK["Docker 内：基线通过 → 评估 → 回归失败 → 修复后通过"]
+    WORK --> HANDOFF["WF-08 确认聊天停止；协调方审查严格 Handoff JSON"]
+    HANDOFF --> VERIFY{"WF-09 干净容器独立复验与补丁门槛通过？"}
+    VERIFY -->|否| HOLD
+    VERIFY -->|是| FRESH{"WF-10 发布前刷新政策、归属、上游 SHA 与 PR Head"}
+    FRESH -->|无冲突；基准变化已重新验证| PUBLISH["WF-11 控制器创建 Fork／分支／PR，或更新原 PR"]
+    FRESH -->|冲突或无法安全重验证| HOLD
+    PUBLISH --> OBSERVE["WF-12 观察当前 Head 的 CI、维护者反馈与远端终态"]
+    OBSERVE --> DECIDE{"观察结果"}
+    DECIDE -->|待授权、pending、无可执行反馈| TICK
+    DECIDE -->|已合并、关闭或要求停止| END["结束该任务的自动修改；记录结果并通知一次"]
+    DECIDE -->|可读相关 CI 失败或明确代码反馈| REVISE{"轮次与额度允许？"}
+    REVISE -->|是| ENV
+    REVISE -->|否| HOLD
+    DECIDE -->|明确的 PR 描述修改请求| DESCRIPTION["新聊天判断；空代码改动；保留既有验证；仅更新原 PR 描述"]
+    DESCRIPTION --> OBSERVE
+    DECIDE -->|模糊、越界、日志不可读或外部 Head| HOLD
+    OBSERVE -.-> LEARN["WF-13 证据与结果学习；离线总览；有限检查清单与排序加分"]
+    LEARN -.-> SELECT

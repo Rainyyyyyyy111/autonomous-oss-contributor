@@ -20,6 +20,8 @@ max_repositories = 50
 issues_per_repo = 10
 interval_seconds = 3600
 watch_seconds = 600
+min_issue_age_hours = 24
+include_unlabelled = true
 
 [notifications]
 enabled = true

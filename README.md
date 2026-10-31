@@ -1,6 +1,6 @@
 # Autonomous OSS Contributor
 
-[中文说明](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Desktop workflow](docs/desktop-workflow.md) · [Contributing](CONTRIBUTING.md)
+[中文说明](README.zh-CN.md) · [Workflow v0.1 & change archive](docs/workflows/README.md) · [Architecture](docs/architecture.md) · [Desktop workflow](docs/desktop-workflow.md) · [Contributing](CONTRIBUTING.md)
 
 Configure once. The agent discovers Python projects, selects suitable bugs, starts a fresh Codex chat for each repair, independently verifies patches in Docker, submits PRs, and follows CI/review within your allowlist and budgets. Users do not pick each issue or relay the workflow.
 
@@ -9,6 +9,32 @@ Configure once. The agent discovers Python projects, selects suitable bugs, star
 The optional standalone App Server backend remains available; live model turns returned `model_not_found` in the development account. That backend is not required by the desktop autopilot.
 
 The goal is a useful, verifiable PR. Acceptance and merging remain the upstream maintainer's decision.
+
+## Feedback learning memory
+
+Automatic selection now ranks bounded, bug-first issue search evidence, filling remaining slots from issues without the bug label (`discovery.include_unlabelled = false` disables this fallback). Reproducer blocks, expected/actual behavior, errors and design scope produce inspectable ordering signals. New issues receive 24 hours of triage time by default (`min_issue_age_hours`); assigned search snapshots wait for discovery refresh. Full policy/ownership checks still run before work and publication. Legacy tasks without creation metadata retain the existing eligibility path.
+
+Observed PR states and remote creation/closure/merge timestamps are stored even without feedback. Prior observed merges give a small capped repository ordering bonus; closure alone is never a negative training label. Scores are heuristics, not merge probabilities.
+
+```sh
+# Offline scope-aware HTML snapshot: tasks, queue reasons, budgets, chats and evidence
+uv run oss-contributor dashboard --config PATH
+# Prepare configured local images and probe isolation with fresh empty containers
+uv run oss-contributor environments prepare --config PATH
+```
+
+The dashboard is `state_dir/dashboard.html`; rerun to refresh, with no web service or external assets. Before native dispatch, the controller checks the configured image and probes isolation; successful metadata is reused for at most an hour and invalidated when the image ID changes. Missing bundled runners can be built with `--build-runner`. No target workspaces, credentials or repaired environment snapshots are reused. Target dependencies still install fresh for independent validation; dependency caching remains future work.
+
+Existing PR monitoring automatically archives maintainer feedback and readable current-head CI failures without additional model calls. SQLite retains versioned evidence, the repair/files/validation state at detection, conservative cause hypotheses, and preventive checks. Inspectable mirrors live at `state_dir/learning/report.md` and `feedback.json`. Later native repair jobs and standalone model calls receive relevant checks from the controller's built-in lesson catalog.
+
+```sh
+# Read-only backfill of known PRs in the current allowlist and persisted scope, including closed PRs
+uv run oss-contributor learning refresh --config PATH
+# Offline statistics and export
+uv run oss-contributor learning report --config PATH
+```
+
+Old-head reviews are historical evidence, never actionable current-head feedback. The notification listener's periodic sweep also collects late feedback on closed PRs without reopening tasks. Closure alone is not negative feedback; ambiguous quality complaints do not establish a code defect. Raw remote prose never becomes policy. Communication and CI checks transfer across repositories; specific code and stop concerns remain repository-specific. Addressed counts mean locally processed, not maintainer acceptance or causal proof of improvement. This mechanism does not rewrite controller code, skills, authorization or verification gates.
 
 ## Workflow
 

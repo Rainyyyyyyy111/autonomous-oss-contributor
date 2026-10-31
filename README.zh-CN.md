@@ -1,12 +1,25 @@
 # Autonomous OSS Contributor
 
-[English](README.md) · [桌面自动调度](docs/desktop-workflow.md) · [架构](docs/architecture.md) · [验证范围](docs/validation.md)
+[English](README.md) · [Workflow v0.1 与变更档案](docs/workflows/README.md) · [桌面自动调度](docs/desktop-workflow.md) · [架构](docs/architecture.md) · [验证范围](docs/validation.md)
 
 **配置一次，让 Agent 自动发现、筛选、修复、验证并提交开源贡献，持续跟进 CI 和维护者反馈。** 正常流程不用你挑 Issue、转发提示词、运行测试或点提交。
 
 `0.3.0a1` 是实验性 Alpha，主路径为 **Codex 桌面技能＋原生 heartbeat＋持久化 Python 控制器**。独立 CLI 的 App Server 模型调用作为备用路径保留，当前开发账号的 `model_not_found` 不再阻挡桌面路径。维护者是否接受、合并，仍由维护者决定。
 
 ## 一次配置，持续运行
+
+自动筛选会先读取 Bug Issue，并用未标 Bug 标签的 Issue 补足每仓库的候选额度；`discovery.include_unlabelled = false` 可关闭补充。候选根据复现代码、预期/实际行为、错误信息和设计范围信号排序，默认给新 Issue 留出 24 小时维护者分诊时间（`min_issue_age_hours`）。搜索中有人指派的候选暂缓，下一轮刷新证据再判断。排序只决定先尝试谁，开工和发布前的完整贡献政策/归属检查、回归与独立容器复验照常执行。
+
+监控还会保存真实 PR 的开放、关闭、合并结果与 GitHub 时间戳。已有合并记录只给同仓库候选一个有上限的小幅排序加分；关闭不直接算负面反馈，分数不代表合并概率。维护者反馈会形成有来源、待验证的预防检查，不会自动改写权限或质量门槛。
+
+```sh
+# 本地离线总览：任务、候选排序原因、聊天、额度、反馈、环境预检；不启动新任务
+uv run oss-contributor dashboard --config PATH
+# 一次性准备已配置镜像并在空容器检查隔离；缺少内置 runner 时可加 --build-runner
+uv run oss-contributor environments prepare --config PATH
+```
+
+总览生成在状态目录的 `dashboard.html`，重新运行命令刷新，不启动 Web 服务。每次正式派发前会检查本地镜像并预检隔离，同一镜像的成功预检最多复用一小时；不会缓存工作容器、凭据或已修复代码。目标依赖仍在每次独立验证时重新安装，依赖缓存和完整环境快照尚未实现。
 
 需要 macOS / Linux、Python 3.12+、uv、GitHub CLI、运行中的 Docker，以及具备原生聊天/自动化工具的 Codex App 会话。复用已有 GitHub 和桌面 Codex 登录；桌面路径不要求独立 Codex CLI 的文件认证缓存。
 
@@ -52,8 +65,22 @@ uv run oss-contributor desktop install-skill
 5. 控制器重新下载固定基准，在干净容器中独立运行原代码回归失败、修复后回归通过、完整测试与配置检查。
 6. 发布前重新检查上游、冲突和远端 Head，然后自动创建/更新 Fork、分支和普通 PR。
 7. 跟进当前 Head 的可读 CI 失败及未处理维护者反馈；每次修订使用新聊天并重新过完整门槛。等待维护者批准工作流不会触发无效推送。
+8. 自动归档维护者反馈和可读 CI 失败，记录来源、评论版本、当时的修改及验证状态；后续修复聊天自动获得相关预防检查项。
 
 仅在创建/更新 PR、终态或需要处理的阻塞时通知。正常等待保持安静。通知与已处理事件持久化；通知为至少一次投递，极端情况下在“已显示、未确认”的崩溃间隙可能重复。
+
+## 从反馈持续改进
+
+反馈记忆默认随现有监控运行，不增加模型调用。SQLite 保存去重后的原始证据；`state_dir/learning/report.md` 和 `feedback.json` 自动镜像分析、预防检查项及处理结果。旧提交上的维护者评论也会归档，但不能据此修订当前代码；通知监听器的周期扫描会收集已关闭 PR 的后续评论，不会重新开启任务。
+
+```sh
+# 回填当前白名单和监控范围内已有 PR（包括已关闭 PR），只读 GitHub
+uv run oss-contributor learning refresh --config PATH
+# 查看分类统计并重新导出本地记录，无网络请求
+uv run oss-contributor learning report --config PATH
+```
+
+分析明确区分事实与假设：关闭 PR 不等于差评；“AI slop”等宽泛评价不证明具体代码有错。检查项来自控制器内置规则，原始评论不会被提升为执行指令。沟通质量、描述和 CI 的经验可用于其他仓库，具体代码和停止请求仅用于原仓库。记录“已处理”仅表示本地流程处理完成，不表示维护者认可或证实了改进效果。不会自动改写控制器、技能、白名单或验证门槛。
 
 ## 默认边界
 

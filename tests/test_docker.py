@@ -8,6 +8,7 @@ from conftest import BASE, FIX, REGRESSION
 from oss_contributor.config import Config, Repository
 from oss_contributor.desktop import Desktop, Handoff
 from oss_contributor.engine import Engine
+from oss_contributor.environments import Environments
 from oss_contributor.models import Assessment, Repair
 from oss_contributor.process import ContributorError
 from oss_contributor.sandbox import DockerSandbox
@@ -20,6 +21,21 @@ pytestmark = [
         reason="set OSS_TEST_DOCKER=1 to run Docker integration",
     ),
 ]
+
+
+def test_prepare_runner_uses_fresh_empty_isolated_container(tmp_path):
+    config = Config(state_dir=tmp_path / "state")
+    store = Store(config)
+    try:
+        manager = Environments(store)
+        repo = Repository(name="owner/fixture", install=[])
+        result = manager.prepare(repo)
+        assert result["ok"], result
+        assert result["image_id"].startswith("sha256:")
+        assert manager.prepare(repo) == result
+        assert not store.tasks() and store.usage()["attempts"] == 0
+    finally:
+        store.close()
 
 
 def test_real_docker_independent_red_green_verification(tmp_path):

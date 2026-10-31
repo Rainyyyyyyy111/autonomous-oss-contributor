@@ -212,6 +212,27 @@ def test_only_current_maintainer_review_is_actionable():
     client, _ = check_adapter([], reviews)
     state = client.pr_state("o/r", 1)
     assert [e.body for e in state.events] == ["please fix"]
+    assert [e.body for e in state.feedback_history] == ["fix old code", "please fix"]
+
+
+def test_feedback_history_preserves_source_metadata_and_excludes_dismissed_reviews():
+    reviews = [
+        {"id": 1, "body": "Please shorten the PR description.", "commit_id": "b" * 40,
+         "author_association": "OWNER", "state": "CHANGES_REQUESTED",
+         "html_url": "https://github.com/o/r/pull/1#pullrequestreview-1",
+         "user": {"login": "maintainer"}, "submitted_at": "2026-10-30T09:36:35Z"},
+        {"id": 2, "body": "Old dismissed request", "commit_id": "a" * 40,
+         "author_association": "OWNER", "state": "DISMISSED"},
+    ]
+    client, _ = check_adapter([], reviews)
+    state = client.pr_state("o/r", 1)
+    assert not state.events
+    assert len(state.feedback_history) == 1
+    event = state.feedback_history[0]
+    assert event.author == "maintainer"
+    assert event.commit_sha == "b" * 40
+    assert event.url.endswith("#pullrequestreview-1")
+    assert event.review_state == "CHANGES_REQUESTED"
 
 
 class PublishingGitHub(GitHub):

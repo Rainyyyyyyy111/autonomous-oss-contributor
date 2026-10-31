@@ -32,6 +32,8 @@ class Discovery(StrictModel):
     issues_per_repo: int = Field(10, ge=1, le=100)
     interval_seconds: int = Field(3600, ge=1)
     watch_seconds: int = Field(600, ge=1)
+    min_issue_age_hours: int = Field(24, ge=0, le=720)
+    include_unlabelled: bool = True
 
 
 class Notifications(StrictModel):
@@ -133,6 +135,8 @@ max_repositories = 50
 issues_per_repo = 10
 interval_seconds = 3600
 watch_seconds = 600
+min_issue_age_hours = 24
+include_unlabelled = true
 
 [notifications]
 enabled = true

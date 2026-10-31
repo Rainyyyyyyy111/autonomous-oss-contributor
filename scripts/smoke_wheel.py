@@ -82,6 +82,14 @@ def main():
         health = subprocess.run([str(cli), "desktop", "status", "-c", str(config)],
                                 cwd=work, check=True, text=True, capture_output=True)
         assert json.loads(health.stdout)["reason"] == "empty allowlist"
+        dashboard = subprocess.run([str(cli), "dashboard", "-c", str(config)],
+                                   cwd=work, check=True, text=True, capture_output=True)
+        dashboard_path = Path(json.loads(dashboard.stdout)["dashboard"])
+        assert "Content-Security-Policy" in dashboard_path.read_text()
+        assert dashboard_path.stat().st_mode & 0o777 == 0o600
+        learning = subprocess.run([str(cli), "learning", "report", "-c", str(config)],
+                                  cwd=work, check=True, text=True, capture_output=True)
+        assert json.loads(learning.stdout)["outcome_counts"] == {}
     print("Fresh wheel install, CLI, empty state, license and runtime resources: passed")
 
 

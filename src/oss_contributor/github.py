@@ -184,17 +184,38 @@ class GitHub:
         ]
 
     def issue_numbers(self, repo: str, limit: int) -> list[int]:
-        result = self.api(
-            "search/issues?"
-            + urlencode(
-                {
-                    "q": f"repo:{repo} is:issue is:open label:bug",
-                    "sort": "updated",
-                    "per_page": limit,
-                }
+        return [row["number"] for row in self.issue_candidates(repo, limit, False)]
+
+    def issue_candidates(self, repo: str, limit: int, include_unlabelled: bool = True) -> list[dict]:
+        """Bounded bug-first search. Search evidence is not an ownership clearance."""
+        rows: list[dict] = []
+        filters = ["label:bug"] + (["-label:bug"] if include_unlabelled else [])
+        for label in filters:
+            remaining = limit - len(rows)
+            if remaining <= 0:
+                break
+            result = self.api(
+                "search/issues?" + urlencode({
+                    "q": f"repo:{repo} is:issue is:open {label}",
+                    "sort": "updated", "order": "desc", "per_page": remaining,
+                })
             )
-        )
-        return [row["number"] for row in result["items"]]
+            if result.get("incomplete_results"):
+                raise ContributorError("issue discovery search is incomplete")
+            for row in result["items"]:
+                if row.get("pull_request") or any(r["number"] == row["number"] for r in rows):
+                    continue
+                rows.append({
+                    "number": row["number"], "title": row.get("title") or "",
+                    "body": (row.get("body") or "")[:20_000],
+                    "url": row.get("html_url") or "",
+                    "labels": [v["name"] for v in row.get("labels", [])],
+                    "created_at": row.get("created_at") or "",
+                    "updated_at": row.get("updated_at") or "",
+                    "assignees": len(row.get("assignees", [])),
+                    "source": "github_search", "ownership_checked": False,
+                })
+        return rows
 
     def optional_file(self, repo: str, path: str, ref: str | None = None) -> str:
         endpoint = f"repos/{repo}/contents/{path}" + (f"?ref={ref}" if ref else "")
@@ -327,6 +348,7 @@ class GitHub:
         head = raw["head"]["sha"]
         state = "merged" if raw.get("merged_at") else raw["state"]
         events = []
+        history = []
         stop = False
         comments = self._pages(f"repos/{repo}/issues/{number}/comments")
         reviews = self._pages(f"repos/{repo}/pulls/{number}/reviews")
@@ -336,16 +358,22 @@ class GitHub:
                 continue
             body = item.get("body") or ""
             stop |= bool(STOP.search(body))
+            if not body.strip() or item.get("state") == "DISMISSED":
+                continue
+            event = ReviewEvent(
+                id=f"review:{item.get('node_id', item['id'])}:{item.get('updated_at', item.get('submitted_at', ''))}",
+                body=body,
+                url=item.get("html_url") or "",
+                author=(item.get("user") or {}).get("login", ""),
+                commit_sha=item.get("commit_id") or "",
+                path=item.get("path") or "",
+                review_state=item.get("state") or "",
+            )
+            history.append(event)
             if item in comments or (
                 item.get("commit_id") == head and item.get("state") != "DISMISSED"
             ):
-                if body.strip():
-                    events.append(
-                        ReviewEvent(
-                            id=f"review:{item.get('node_id', item['id'])}:{item.get('updated_at', item.get('submitted_at', ''))}",
-                            body=body,
-                        )
-                    )
+                events.append(event)
         checks = self.api(f"repos/{repo}/commits/{head}/check-runs?per_page=100")
         statuses = self.api(f"repos/{repo}/commits/{head}/status?per_page=100")
         waiting = ""
@@ -419,9 +447,13 @@ class GitHub:
                 head_sha=head,
                 body=raw.get("body") or "",
                 events=events,
+                feedback_history=history,
                 waiting=waiting,
                 stop=stop,
                 ci=ci,
+                created_at=raw.get("created_at") or "",
+                closed_at=raw.get("closed_at") or "",
+                merged_at=raw.get("merged_at") or "",
             )
         )
 

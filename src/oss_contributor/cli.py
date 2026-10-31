@@ -13,8 +13,11 @@ from .codex import Codex
 from .config import TEMPLATE, Config, default_home, load_config
 from .desktop import Desktop, heartbeat_prompt, install_skill
 from .engine import Engine
+from .environments import Environments
+from .installation import atomic_write
+from .learning import LearningMemory
 from .notifications import NotificationWatcher
-from .process import ContributorError, run_command
+from .process import ContributorError, RateLimited, run_command
 from .sandbox import DockerSandbox
 from .store import Store
 
@@ -23,6 +26,10 @@ desktop_app = typer.Typer(no_args_is_help=True, help="Persistent native-chat aut
 app.add_typer(desktop_app, name="desktop")
 notifications_app = typer.Typer(no_args_is_help=True, help="Scoped GitHub notification ingestion and triage; no publication or model calls.")
 app.add_typer(notifications_app, name="notifications")
+learning_app = typer.Typer(no_args_is_help=True, help="Inspect feedback evidence and preventive checklists.")
+app.add_typer(learning_app, name="learning")
+environments_app = typer.Typer(no_args_is_help=True, help="Prepare local runner images without target workspace reuse.")
+app.add_typer(environments_app, name="environments")
 ConfigOption = Annotated[Path | None, typer.Option("--config", "-c")]
 
 
@@ -194,6 +201,49 @@ def inspect_task(task_id: int, config: ConfigOption = None):
 
 
 @app.command()
+def dashboard(config: ConfigOption = None, output: Annotated[Path | None, typer.Option("--output")] = None):
+    """Export a scope-aware offline HTML status snapshot; no remote or model calls."""
+    from .dashboard import render, snapshot
+
+    store = Store(load(config))
+    try:
+        with store.lock():
+            data = snapshot(Desktop(Engine(store.config, store)))
+            target = output or store.home / "dashboard.html"
+            if target.is_symlink():
+                raise ContributorError("dashboard output cannot be a symbolic link")
+            atomic_write(target, render(data).encode())
+            target.chmod(0o600)
+            emit({"dashboard": str(target.resolve()), "generated_at": data["generated_at"],
+                  "notice": "Offline snapshot; rerun to refresh. No tasks were started."})
+    finally:
+        store.close()
+
+
+@environments_app.command("prepare")
+def prepare_environments(config: ConfigOption = None, build_runner: bool = typer.Option(False, "--build-runner")):
+    """Inspect configured local images and probe isolation in empty disposable containers."""
+    store = Store(load(config))
+    try:
+        with store.lock():
+            if store.desktop_jobs():
+                raise ContributorError("native chat active; do not change runner images during a repair")
+            if not DockerSandbox.doctor()["ok"]:
+                raise ContributorError("Docker unavailable; start Docker before environment preparation")
+            if build_runner:
+                DockerSandbox.build()
+            manager = Environments(store)
+            repositories = {repo.image: repo for repo in store.config.repositories}
+            reports = [manager.prepare(repo, refresh=True) for repo in repositories.values()]
+            emit({"environments": reports,
+                  "notice": "Only runner images are prepared. Target dependencies install fresh per validation."})
+            if any(not r["ok"] for r in reports):
+                raise typer.Exit(1)
+    finally:
+        store.close()
+
+
+@app.command()
 def pause(config: ConfigOption = None):
     """Stop new model calls and publication; the current bounded tool call may finish."""
     store = Store(load(config))
@@ -221,6 +271,42 @@ def native_call(config: Path | None, method: str, *args, **kwargs):
     try:
         with store.lock():
             emit(getattr(Desktop(Engine(cfg, store)), method)(*args, **kwargs))
+    finally:
+        store.close()
+
+
+@learning_app.command("report")
+def learning_report(config: ConfigOption = None):
+    """Export local feedback records and hypotheses; no network or model calls."""
+    store = Store(load(config))
+    try:
+        with store.lock():
+            memory = LearningMemory(store)
+            emit({**memory.export(), **{k: v for k, v in memory.report().items() if k != "records"}})
+    finally:
+        store.close()
+
+
+@learning_app.command("refresh")
+def learning_refresh(config: ConfigOption = None):
+    """Backfill known allowlisted PRs, including closed PRs; no models or GitHub writes."""
+    store = Store(load(config))
+    try:
+        with store.lock():
+            desktop = Desktop(Engine(store.config, store))
+            if store.meta("paused"):
+                raise ContributorError("paused by user")
+            if time.time() < float(store.meta("github_retry_after", "0")):
+                raise ContributorError("GitHub server-requested backoff")
+            targets = NotificationWatcher(desktop).targets()
+            for task in targets.values():
+                remote = desktop.engine.github.pr_state(task["repo"], task["data"]["pr"]["number"])
+                # Learning only: no triage, task transitions, dispatch or marking events processed.
+                desktop.engine.learning.observe(task, remote)
+            emit({"inspected_prs": len(targets), **desktop.engine.learning.export()})
+    except RateLimited as exc:
+        store.set_meta("github_retry_after", str(time.time() + exc.seconds))
+        raise
     finally:
         store.close()
 

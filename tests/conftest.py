@@ -118,6 +118,9 @@ class FakeGitHub:
     def issue_numbers(self, repo, limit):
         return [1]
 
+    def issue_candidates(self, repo, limit, include_unlabelled=True):
+        return [self.issue_value.model_dump()]
+
     def issue(self, repo, number):
         return self.issue_value.model_copy(deep=True)
 

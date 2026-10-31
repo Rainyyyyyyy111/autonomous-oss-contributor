@@ -109,7 +109,8 @@ class NotificationWatcher:
         ).fetchall()
         task_ids = {row["task"] for row in pending}
         if sweep:
-            task_ids.update(t["id"] for t in targets.values() if t["status"] not in {"closed", "merged"})
+            # Closed/merged PRs can receive late feedback. Archive it without reopening work.
+            task_ids.update(targets)
         results = []
         for ident in sorted(task_ids):
             if ident not in targets:

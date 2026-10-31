@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Establish Workflow v0.1 as a separate, archived process baseline with diagrams, stage/evidence mapping, default rules, metric definitions, source hashes and a Git locator. Add per-batch change records, an index, a template and contributor/agent documentation conventions.
+
+- Add bug-first discovery with an unlabelled fallback, explainable candidate ranking, configurable issue triage cooldown and assignment deferral. Both native and standalone scheduling retain full eligibility checks and unchanged budgets.
+- Record remote PR outcomes independently of review text, preserving GitHub timestamps. Use only a capped prior-merge ordering bonus; do not infer rejection from closure or claim calibrated merge probabilities.
+- Add a scope-aware offline HTML dashboard with escaped remote text, no external assets or write controls, current-head CI distinctions, queue reasons, feedback, budgets and job state.
+- Add local runner preparation and cached, immutable-image isolation probes before native reservations. Independent validation continues using fresh target environments; no dependency/workspace snapshots are reused.
+
+- Add durable versioned feedback memory, conservative cause hypotheses and preventive checklists for later native/standalone repairs. Archive historical maintainer reviews and late closed-PR feedback without authorizing revisions; expose read-only backfill and offline reports with evidence and local processing outcomes.
 - Add scoped GitHub notification ingestion with conditional polling, server interval/rate-limit handling, atomic feed/inbox persistence, immediate state triage, priority review queue and periodic PR sweeps. The observer never invokes models or publishes.
 - Add foreground notification monitoring, optional macOS LaunchAgent installation/removal and separately deduplicated local alerts; expose listener health in local desktop status.
 - Generate concise PR explanations and validation summaries while retaining command transcripts in local evidence and disclosing Codex assistance.
