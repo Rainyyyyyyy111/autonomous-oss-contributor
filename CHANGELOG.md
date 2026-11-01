@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Mark the reviewed source checkpoint with annotated Git tag `v0.3`; retain Python package `0.3.0a1` and Workflow v0.6. Record the actual tag target and authorized origin push scope in [CHG-20261102-002](docs/workflows/changes/2026-11-02-002-version-marker.md).
+
 - Record local dependency-complete commit batches and actual Git locators for Workflow v0.3–v0.6, verify exported staged snapshots, and distinguish current checks from prior full-suite/Docker evidence. No runtime contract or package release change. See [CHG-20261102-001](docs/workflows/changes/2026-11-02-001-local-commits.md).
 
 - Keep each budget reservation's local day fixed through usage insertion/update, model accounting, native settlement/refunds and publication metadata, including midnight transitions; refresh native available time after environment preparation. This repairs the existing daily-limit contract without changing limits or runtime scope. See [the November 2 audit](docs/workflows/changes/2026-11-01-006-integrated-audit.md).
