@@ -39,6 +39,10 @@ max_delay_seconds = 2
 # cached_input_usd_per_million = "..."
 # output_usd_per_million = "..."
 
+[memory]
+ttl_days = 90
+max_context_records = 200
+
 [discovery]
 min_stars = 500
 pushed_days = 30

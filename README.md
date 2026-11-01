@@ -1,6 +1,6 @@
 # Autonomous OSS Contributor
 
-[中文说明](README.zh-CN.md) · [Workflow v0.5 & change archive](docs/workflows/README.md) · [Architecture](docs/architecture.md) · [Desktop workflow](docs/desktop-workflow.md) · [Contributing](CONTRIBUTING.md)
+[中文说明](README.zh-CN.md) · [Workflow v0.6 & change archive](docs/workflows/README.md) · [Architecture](docs/architecture.md) · [Desktop workflow](docs/desktop-workflow.md) · [Contributing](CONTRIBUTING.md)
 
 Configure once. The agent discovers Python projects, selects suitable bugs, starts a fresh Codex chat for each repair, independently verifies patches in Docker, submits PRs, and follows CI/review within your allowlist and budgets. Users do not pick each issue or relay the workflow.
 

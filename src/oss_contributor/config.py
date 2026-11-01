@@ -52,6 +52,11 @@ class Notifications(StrictModel):
     max_pages: int = Field(10, ge=1, le=100)
 
 
+class MemoryPolicy(StrictModel):
+    ttl_days: int = Field(90, ge=1, le=3650)
+    max_context_records: int = Field(200, ge=1, le=1000)
+
+
 class Repository(StrictModel):
     name: str
     image: str = "oss-contributor-runner:0.1"
@@ -99,6 +104,7 @@ class Config(StrictModel):
     codex_version: str = "0.140.0"
     model: str | None = None
     metering: MeteringPolicy = Field(default_factory=MeteringPolicy)
+    memory: MemoryPolicy = Field(default_factory=MemoryPolicy)
     limits: Limits = Field(default_factory=lambda: Limits())
     discovery: Discovery = Field(default_factory=lambda: Discovery())
     notifications: Notifications = Field(default_factory=lambda: Notifications())
@@ -162,6 +168,10 @@ max_delay_seconds = 2
 # input_usd_per_million = "..."
 # cached_input_usd_per_million = "..."
 # output_usd_per_million = "..."
+
+[memory]
+ttl_days = 90
+max_context_records = 200
 
 [discovery]
 min_stars = 500

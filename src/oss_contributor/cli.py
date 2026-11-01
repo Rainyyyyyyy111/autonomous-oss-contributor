@@ -311,6 +311,37 @@ def learning_refresh(config: ConfigOption = None):
         store.close()
 
 
+def mutate_memory(config: ConfigOption, task_id: int, record_id: str, *, delete: bool):
+    store = Store(load(config))
+    try:
+        with store.lock():
+            emit(LearningMemory(store).mutate(task_id, record_id, delete=delete))
+    finally:
+        store.close()
+
+
+@learning_app.command("invalidate")
+def invalidate_memory(task_id: int, record_id: str, config: ConfigOption = None):
+    """Operator-only: retire one scoped learning record; do not change task authorization."""
+    mutate_memory(config, task_id, record_id, delete=False)
+
+
+@learning_app.command("delete")
+def delete_memory(task_id: int, record_id: str, config: ConfigOption = None):
+    """Operator-only: remove learning payload/exports and retain a no-content tombstone/audit."""
+    mutate_memory(config, task_id, record_id, delete=True)
+
+
+@learning_app.command("audit")
+def memory_audit(config: ConfigOption = None):
+    """Inspect local scope-filtered memory mutation metadata, without source text."""
+    store = Store(load(config))
+    try:
+        emit({"audit": LearningMemory(store).audit()})
+    finally:
+        store.close()
+
+
 @notifications_app.command("poll")
 def notification_poll(
     config: ConfigOption = None, quiet: bool = typer.Option(False, "--quiet"),

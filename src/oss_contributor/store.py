@@ -59,7 +59,26 @@ class Store:
           CREATE TABLE IF NOT EXISTS model_usage_events(
             call_id TEXT NOT NULL, event_id TEXT NOT NULL, digest TEXT NOT NULL,
             PRIMARY KEY(call_id,event_id));
+          CREATE TABLE IF NOT EXISTS memory_tombstones(
+            task INTEGER NOT NULL, record_id TEXT NOT NULL, source_id TEXT NOT NULL,
+            source_version REAL NOT NULL, revision INTEGER NOT NULL,
+            deleted REAL NOT NULL, PRIMARY KEY(task,record_id));
+          CREATE TABLE IF NOT EXISTS memory_audit(
+            id INTEGER PRIMARY KEY, task INTEGER NOT NULL, record_id TEXT NOT NULL,
+            action TEXT NOT NULL, created REAL NOT NULL);
         """)
+        # Pin legacy expiry once, only inside the current visible scope. Conditional
+        # updates avoid replacing a concurrently refreshed record with our snapshot.
+        visible = self.visible_task_ids()
+        with self.db:
+            for row in self.db.execute("SELECT task,event,data,first_seen FROM feedback_memory").fetchall():
+                if row["task"] not in visible:
+                    continue
+                data = json.loads(row["data"])
+                if "expires_at" not in data:
+                    data["expires_at"] = row["first_seen"] + config.memory.ttl_days * 86400
+                    self.db.execute("UPDATE feedback_memory SET data=? WHERE task=? AND event=? AND data=?",
+                                    (json.dumps(data), row["task"], row["event"], row["data"]))
 
     def close(self):
         self.db.close()

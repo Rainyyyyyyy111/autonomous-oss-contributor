@@ -4,6 +4,7 @@
 
 - Keep each budget reservation's local day fixed through usage insertion/update, model accounting, native settlement/refunds and publication metadata, including midnight transitions; refresh native available time after environment preparation. This repairs the existing daily-limit contract without changing limits or runtime scope. See [the budget change record](docs/workflows/changes/2026-11-01-003-finalization-accounting-provenance.md).
 
+- Add Workflow v0.6 memory lifecycle: pinned expiry, supersession, scoped invalidation/deletion/audit, no-content tombstones, active-reference protection and safe derived-report invalidation. See [CHG-20261101-004](docs/workflows/changes/2026-11-01-004-memory-governance.md).
 
 - Add Workflow v0.5 finalization time within the existing attempt deadline, cumulative observed-token accounting with unknown/partial coverage, pinned operator-supplied price estimates and per-call prompt/schema/model provenance. Preserve native stop confirmation and reject unverifiable configured usage limits. See [CHG-20261101-003](docs/workflows/changes/2026-11-01-003-finalization-accounting-provenance.md).
 

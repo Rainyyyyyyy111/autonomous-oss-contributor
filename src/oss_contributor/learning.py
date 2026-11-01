@@ -7,7 +7,9 @@ import json
 import re
 import time
 from collections import Counter
+from datetime import datetime
 
+from .errors import PermissionDenied
 from .installation import atomic_write
 from .models import ACKNOWLEDGEMENT, PRState, ReviewEvent
 from .safety import STOP
@@ -47,7 +49,7 @@ LESSONS = {
         "Feedback has no recognized target; manual or task-level analysis is still required.",
         "Read the original evidence before deciding whether a change is needed.",
     ),
-    "positive": ("An approval was recorded; this does not independently validate a lesson.", ""),
+    "positive": ("Positive, acknowledged or withdrawn text does not independently validate a lesson.", ""),
 }
 
 
@@ -55,6 +57,8 @@ def categories(event: ReviewEvent) -> list[str]:
     if event.kind == "ci":
         return ["ci_failure"]
     body = event.body
+    if not body.strip() or ACKNOWLEDGEMENT.fullmatch(body):
+        return ["positive"]
     result = []
     if STOP.search(body):
         result.append("stop_request")
@@ -73,6 +77,13 @@ class LearningMemory:
 
     def observe(self, task: dict, remote: PRState):
         """Archive before terminal/head/wait guards; never mark actionable events processed."""
+        if task["id"] not in self.store.visible_task_ids():
+            raise PermissionDenied("memory task is outside the configured scope")
+        stored = self.store.get(task["id"])
+        if (task["repo"], task["issue"], task["data"]["pr"]["number"], remote.number) != (
+            stored["repo"], stored["issue"], stored["data"]["pr"]["number"], stored["data"]["pr"]["number"],
+        ):
+            raise PermissionDenied("memory evidence identity changed")
         changed = False
         now = time.time()
         outcome = {
@@ -96,12 +107,13 @@ class LearningMemory:
         events = {event.id: event for event in remote.feedback_history + remote.events}
         with self.store.db:
             for event in events.values():
-                if not event.body.strip() or ACKNOWLEDGEMENT.fullmatch(event.body):
-                    continue
                 # Preserve edits even when an adapter omits updated_at from the event ID.
                 key = hashlib.sha256(json.dumps(
                     [event.id, event.body], ensure_ascii=False,
                 ).encode()).hexdigest()
+                if self.store.db.execute("SELECT 1 FROM memory_tombstones WHERE task=? AND record_id=?",
+                                         (task["id"], key)).fetchone():
+                    continue
                 row = self.store.db.execute(
                     "SELECT data FROM feedback_memory WHERE task=? AND event=?",
                     (task["id"], key),
@@ -110,10 +122,18 @@ class LearningMemory:
                     data = json.loads(row["data"])
                 else:
                     tags = categories(event)
+                    source_id, source_version = self.source(event.model_dump())
+                    previous_versions = [json.loads(row[0]) for row in self.store.db.execute(
+                        "SELECT data FROM feedback_memory WHERE task=?", (task["id"],),
+                    )]
+                    revision = 1 + max((record.get("revision", 0) for record in previous_versions
+                                        if self.source(record["event"])[0] == source_id), default=0)
                     data = {
                         "record_id": key, "repo": task["repo"], "issue": task["issue"],
                         "pr": task["data"]["pr"], "event": event.model_dump(),
-                        "categories": tags, "analysis_version": 1,
+                        "categories": tags, "analysis_version": 2,
+                        "source_id": source_id, "source_version": source_version, "revision": revision,
+                        "expires_at": now + self.store.config.memory.ttl_days * 86400,
                         "analysis_status": "hypothesis_requires_validation",
                         "analysis": [
                             {"category": tag, "hypothesis": LESSONS[tag][0],
@@ -143,16 +163,114 @@ class LearningMemory:
         rows = self.store.db.execute(
             "SELECT * FROM feedback_memory ORDER BY first_seen DESC,task,event"
         ).fetchall()
-        return [
+        visible = self.store.visible_task_ids()
+        records = [
             {**json.loads(row["data"]), "task": row["task"],
              "first_seen": row["first_seen"], "last_seen": row["last_seen"],
              "addressed": self.store.seen(row["task"], json.loads(row["data"])["event"]["id"])}
-            for row in rows
+            for row in rows if row["task"] in visible
         ]
+        latest: dict[tuple[int, str], tuple[tuple[float, int, float, str], str]] = {}
+        for record in records:
+            source_id, version = self.source(record["event"])
+            record["source_id"] = source_id
+            record["source_version"] = version
+            record.setdefault("expires_at", record["first_seen"] + self.store.config.memory.ttl_days * 86400)
+            order = (version, record.get("revision", 0), record["first_seen"], record["record_id"])
+            identity = (record["task"], source_id)
+            if identity not in latest or order > latest[identity][0]:
+                latest[identity] = (order, record["record_id"])
+        for tombstone in self.store.db.execute("SELECT * FROM memory_tombstones"):
+            if tombstone["task"] not in visible:
+                continue
+            identity = (tombstone["task"], tombstone["source_id"])
+            order = (tombstone["source_version"], tombstone["revision"], tombstone["deleted"], tombstone["record_id"])
+            if identity not in latest or order > latest[identity][0]:
+                latest[identity] = (order, tombstone["record_id"])
+        now = time.time()
+        for record in records:
+            if record.get("invalidated_at") is not None:
+                record["status"] = "invalidated"
+            elif record["expires_at"] <= now:
+                record["status"] = "expired"
+            elif latest[(record["task"], record["source_id"])][1] != record["record_id"]:
+                record["status"] = "superseded"
+            else:
+                record["status"] = "active"
+        return records
+
+    @staticmethod
+    def source(event: dict) -> tuple[str, float]:
+        ident = event["id"]
+        parts = ident.split(":", 2)
+        version = 0.0
+        if event.get("kind") == "review" and len(parts) == 3 and parts[0] == "review":
+            ident = ":".join(parts[:2])
+            try:
+                stamp = datetime.fromisoformat(parts[2].replace("Z", "+00:00"))
+                if stamp.tzinfo is not None:
+                    version = stamp.timestamp()
+            except ValueError:
+                pass
+        return hashlib.sha256(json.dumps([event.get("kind", "review"), ident]).encode()).hexdigest(), version
+
+    def mutate(self, task_id: int, record_id: str, *, delete: bool) -> dict:
+        """Operator-only local mutation; call under Store.lock. No remote writes."""
+        if task_id not in self.store.visible_task_ids():
+            raise PermissionDenied("memory task is outside the configured scope")
+        if not re.fullmatch(r"[a-f0-9]{64}", record_id):
+            raise ValueError("invalid memory record identifier")
+        row = self.store.db.execute("SELECT data FROM feedback_memory WHERE task=? AND event=?",
+                                    (task_id, record_id)).fetchone()
+        if row is None:
+            if delete and self.store.db.execute("SELECT 1 FROM memory_tombstones WHERE task=? AND record_id=?",
+                                                (task_id, record_id)).fetchone():
+                return {"deleted": False, "already_deleted": True}
+            raise ValueError("unknown memory record")
+        if self.store.tasks(("running", "revising")):
+            raise PermissionDenied("settle active standalone work before changing memory")
+        for job in self.store.desktop_jobs():
+            checks = job["data"].get("learning_context", {}).get("checks", [])
+            if any(record_id in check.get("source_record_ids", []) for check in checks):
+                raise PermissionDenied("settle native jobs referencing this memory before changing it")
+        data = json.loads(row["data"])
+        if not delete and data.get("invalidated_at") is not None:
+            return {"invalidated": False, "already_invalidated": True}
+        # Remove old derived copies before commit. A failed rebuild cannot retain stale payload.
+        directory = self.store.home / "learning"
+        if directory.is_symlink() or directory.exists() and not directory.is_dir():
+            raise PermissionDenied("learning export directory must not be linked or a file")
+        for name in ("feedback.json", "report.md"):
+            (directory / name).unlink(missing_ok=True)
+        now = time.time()
+        with self.store.db:
+            if delete:
+                source_id, source_version = self.source(data["event"])
+                self.store.db.execute("INSERT INTO memory_tombstones VALUES(?,?,?,?,?,?)",
+                                      (task_id, record_id, source_id, source_version, data.get("revision", 0), now))
+                self.store.db.execute("DELETE FROM feedback_memory WHERE task=? AND event=?", (task_id, record_id))
+            else:
+                data["invalidated_at"] = now
+                self.store.db.execute("UPDATE feedback_memory SET data=? WHERE task=? AND event=?",
+                                      (json.dumps(data), task_id, record_id))
+            self.store.db.execute("INSERT INTO memory_audit(task,record_id,action,created) VALUES(?,?,?,?)",
+                                  (task_id, record_id, "delete" if delete else "invalidate", now))
+        exported = True
+        try:
+            self.export()
+        except OSError:
+            exported = False
+        return {"deleted" if delete else "invalidated": True, "exports_rebuilt": exported,
+                "scope": "learning store and derived reports only; other evidence/chats/backups are unaffected"}
+
+    def audit(self) -> list[dict]:
+        visible = self.store.visible_task_ids()
+        return [dict(row) for row in self.store.db.execute("SELECT * FROM memory_audit ORDER BY id")
+                if row["task"] in visible]
 
     def context(self, repo: str) -> dict:
         """Bounded checklist. Only trusted catalog text can reach a worker as guidance."""
-        records = self.records()
+        records = [record for record in self.records() if record["status"] == "active"][:self.store.config.memory.max_context_records]
         selected = []
         for tag, (_, prevention) in LESSONS.items():
             if tag in {"unclassified", "positive"}:
@@ -183,18 +301,23 @@ class LearningMemory:
             "outcomes": outcomes,
             "outcome_counts": dict(Counter(row["state"] for row in outcomes)),
             "addressed": sum(r["addressed"] for r in records),
+            "memory_status_counts": dict(Counter(r["status"] for r in records)),
+            "audit_count": len(self.audit()),
             "note": "Counts describe feedback, not confirmed defects. Closed PRs are not automatically "
                     "negative feedback; addressed means processed locally, not maintainer acceptance. "
                     "PR outcomes do not establish causal improvement.",
         }
 
     def outcomes(self) -> list[dict]:
+        visible = self.store.visible_task_ids()
         return [{"task": row["task"], **json.loads(row["data"]), "observed_at": row["observed"]}
-                for row in self.store.db.execute("SELECT * FROM pr_outcomes ORDER BY task")]
+                for row in self.store.db.execute("SELECT * FROM pr_outcomes ORDER BY task") if row["task"] in visible]
 
     def export(self) -> dict:
         report = self.report()
         directory = self.store.home / "learning"
+        if directory.is_symlink():
+            raise PermissionDenied("learning export directory must not be linked")
         directory.mkdir(exist_ok=True, mode=0o700)
         json_path, md_path = directory / "feedback.json", directory / "report.md"
         atomic_write(json_path, json.dumps(report, ensure_ascii=False, indent=2).encode())
@@ -207,6 +330,7 @@ class LearningMemory:
                       f"Categories: {', '.join(record['categories'])}. "
                       f"PR outcome: {record['last_pr_state']}. "
                       f"Locally addressed: {record['addressed']}.", "",
+                      f"Memory status: {record['status']}; expires at epoch {record['expires_at']}.", "",
                       "Analysis status: hypothesis requiring validation.", ""]
             for item in record["analysis"]:
                 lines += [f"- Hypothesis: {item['hypothesis']}",
