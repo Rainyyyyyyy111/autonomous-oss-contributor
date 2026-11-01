@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record local dependency-complete commit batches and actual Git locators for Workflow v0.3–v0.6, verify exported staged snapshots, and distinguish current checks from prior full-suite/Docker evidence. No runtime contract or package release change. See [CHG-20261102-001](docs/workflows/changes/2026-11-02-001-local-commits.md).
+
 - Keep each budget reservation's local day fixed through usage insertion/update, model accounting, native settlement/refunds and publication metadata, including midnight transitions; refresh native available time after environment preparation. This repairs the existing daily-limit contract without changing limits or runtime scope. See [the November 2 audit](docs/workflows/changes/2026-11-01-006-integrated-audit.md).
 
 - Add Workflow v0.6 memory lifecycle: pinned expiry, supersession, scoped invalidation/deletion/audit, no-content tombstones, active-reference protection and safe derived-report invalidation. Add a frozen synthetic controller corpus with Docker-only candidate evaluation, explicit denominators and paired report checks. Consolidate cross-module validation and document remaining native-platform/model-evidence limits. See [CHG-20261101-004](docs/workflows/changes/2026-11-01-004-memory-governance.md), [CHG-20261101-005](docs/workflows/changes/2026-11-01-005-frozen-evaluation.md) and [CHG-20261101-006](docs/workflows/changes/2026-11-01-006-integrated-audit.md).

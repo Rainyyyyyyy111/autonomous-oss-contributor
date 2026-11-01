@@ -1,5 +1,9 @@
 # Validation and release scope
 
+## Local commit verification — 2026-11-02
+
+The runtime and memory commit snapshots were separately rechecked with 368/381 tests passing (8 optional integrations skipped in each). The final candidate's evaluation/integrated subset passed 20 tests; static checks and source/corpus fingerprints matched. Full-suite 401/9, Docker 8 and 14/14 evaluation below remain prior verification, not reruns during commit preparation. See [actual commits and verification boundaries](workflows/changes/2026-11-02-001-local-commits.md).
+
 ## Local controller audit — 2026-11-02
 
 Final local verification for Workflow v0.3–v0.6 completed with **401 passed, 9 skipped** in the default suite, plus **8 passed** in the explicitly enabled real Docker suite. Ruff, mypy (27 source files), wheel/sdist build, fresh-wheel installation/resource checks, bundled-skill validation and local document/default-policy checks passed. The frozen synthetic controller evaluation matched **14/14** expected decisions; this measures controller gates, not model effectiveness or upstream acceptance.
