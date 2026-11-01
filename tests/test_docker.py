@@ -179,6 +179,15 @@ def test_native_safe_read_retries_once_with_real_docker_and_counts_it(rig, monke
     assert not github.published and not codex.calls and not store.desktop_jobs()
 
 
+def test_frozen_controller_evaluation_with_real_docker():
+    from oss_contributor.evaluation import run_evaluation
+
+    report = run_evaluation(os.environ.get("OSS_TEST_RUNNER_IMAGE", "oss-contributor-runner:0.1"))
+    assert report["metrics"]["cases"] == report["metrics"]["matching_decisions"] == 14
+    assert report["metrics"]["unsafe_acceptances"] == 0
+    assert report["model_calls"] == report["upstream_operations"] == 0
+
+
 def test_installation_network_allows_pypi_and_denies_other_hosts(monkeypatch):
     image = os.environ.get("OSS_TEST_RUNNER_IMAGE", "oss-contributor-runner:0.1")
     if image != "oss-contributor-runner:0.1":

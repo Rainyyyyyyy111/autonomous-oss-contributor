@@ -23,6 +23,7 @@ def main():
         for resource in ("Dockerfile", "bridge.py", "proxy.py"):
             assert f"oss_contributor/runtime/{resource}" in names, resource
         assert "oss_contributor/skills/oss-contributor/SKILL.md" in names
+        assert "oss_contributor/resources/controller-eval-v1.json" in names
         assert any(name.endswith("/licenses/LICENSE") for name in names)
         assert not any("auth.json" in name or ".sqlite" in name for name in names)
 
@@ -46,6 +47,9 @@ def main():
             cwd=work,
             check=True,
         )
+        subprocess.run([str(python), "-I", "-c",
+                        "from oss_contributor.evaluation import load_corpus; assert len(load_corpus()['cases']) == 14"],
+                       cwd=work, check=True)
         subprocess.run([str(cli), "--help"], cwd=work, check=True, stdout=subprocess.DEVNULL)
         config = work / "config.toml"
         subprocess.run(

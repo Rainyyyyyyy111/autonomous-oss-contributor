@@ -1,5 +1,11 @@
 # Validation and release scope
 
+## Local controller audit — 2026-11-02
+
+Final local verification for Workflow v0.3–v0.6 completed with **401 passed, 9 skipped** in the default suite, plus **8 passed** in the explicitly enabled real Docker suite. Ruff, mypy (27 source files), wheel/sdist build, fresh-wheel installation/resource checks, bundled-skill validation and local document/default-policy checks passed. The frozen synthetic controller evaluation matched **14/14** expected decisions; this measures controller gates, not model effectiveness or upstream acceptance.
+
+The Docker round initially reported one image-lookup failure (7 other cases passed); the complete rerun passed all eight. The initial evaluation image lookup also failed before producing a report; its subsequent complete run passed. Root cause of the temporary lookup failure was not established. No live configuration/state, installed skill, service, automation, real model turn or GitHub operation was used for this audit. See the [full 15-item audit and limitations](workflows/changes/2026-11-01-006-integrated-audit.md) and [final synthetic evidence](workflows/evidence/2026-11-02-controller-eval-v1.json). Historical validation below remains attributed to its own date.
+
 ## What the Alpha demonstrates
 
 - Simulated GitHub/Codex and a trusted local bug fixture exercise issue conflicts, policy/CLA/allowlist checks, quotas, pause, wrong patches, baseline failures, timeouts, regression protection, publication interruptions/recovery and duplicate feedback.

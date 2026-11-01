@@ -16,6 +16,7 @@ The Python controller owns authorization, budgets, state transitions, verificati
 | `environments.py`, `dashboard.py` | Local image readiness probes and offline scope-aware operational snapshots; no workspace snapshot reuse or web service |
 | `tool_guard.py`, `worker_tools.py`, `errors.py`, `retries.py` | Persistent monitored-call limits, typed failures and bounded safe-read retries; no blind mutation replay |
 | `accounting.py` | Pinned metering policy, cumulative observed usage, unknown coverage/prices, exact-input/model provenance and within-deadline finalization reserve |
+| `evaluation.py`, `resources/` | Frozen synthetic controller cases, Docker-only candidate validation and environment-matched offline comparison; no production authority |
 
 ## State and publication
 
@@ -23,6 +24,7 @@ SQLite is authoritative; JSONL is a readable mirror rather than a replay journal
 
 Reservation selects that local date once; usage insertion/update, call ledger and refund retain it across midnight. Native dispatch refreshes available time after environment preparation and records the same budget day atomically with its job. No billing-day allocation is inferred. New attempts reserve up to 300 seconds (at most a third of total time) for independent finalization inside the existing deadline; the worker receives the earlier deadline. Cancellation still needs actual native termination before slot/refund settlement.
 
+Memory records pin TTL on first observation, retain version order through supersession and deletion tombstones, and exclude expired/invalidated records from future context. Scoped operator deletion invalidates known exports before committing; it is logical learning-payload deletion, not secure disk erasure or removal from historical chats/evidence. See [Workflow v0.6](workflows/v0.6/README.md). The [fixed evaluation](evaluation.md) measures controller decisions on synthetic inputs, not actual model or upstream success.
 
 A task stores the upstream SHA, changed-file hashes, patch, actual validation commands and results, publication intent, deterministic branch, PR/Head and pending feedback IDs. Publication re-reads issue conflicts and upstream. Unrelated upstream changes require fresh validation; changed patch files stop publication for diagnosis. GitHub git-data operations compare known commits/trees and do not force-update branches. Review IDs are marked processed only after the corresponding publication succeeds.
 

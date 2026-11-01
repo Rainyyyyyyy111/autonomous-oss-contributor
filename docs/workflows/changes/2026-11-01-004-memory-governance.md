@@ -29,7 +29,7 @@
 
 阶段 `uv run pytest -q tests/test_memory_governance.py tests/test_learning.py`：**28 passed，24.47 秒**。最终补充旧行首次期限固定和跨模块核对后，`uv run pytest -q tests/test_integrated_controls.py tests/test_memory_governance.py`：**22 passed，1.34 秒**。覆盖过期、不续期、同 ID 编辑、新旧源版本、失效、删除与重启、墓碑防复活、旧版不回流、导出失败、链接目录、冻结范围、活动任务引用与离线 CLI。
 
-最终全量、Docker、构建和链接检查将在后续统筹记录集中保留。以上为临时状态与合成反馈测试；本批未运行实际删除、失效或配置变更，未访问或修改真实学习账本。
+最终全量、Docker、构建和链接检查统一见 [CHG-20261101-006](2026-11-01-006-integrated-audit.md)。以上为临时状态与合成反馈测试；本批未运行实际删除、失效或配置变更，未访问或修改真实学习账本。
 
 ## 风险与回滚
 

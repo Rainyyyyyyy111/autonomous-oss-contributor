@@ -455,6 +455,31 @@ def accounting_report(config: ConfigOption = None):
         store.close()
 
 
+@app.command("evaluate")
+def evaluate_controller(output: Annotated[Path, typer.Option("--output")],
+                        image: str = typer.Option("oss-contributor-runner:0.1", "--image"),
+                        candidates: Annotated[Path | None, typer.Option("--candidates")] = None):
+    """Evaluate frozen synthetic controller fixtures in local Docker; no live config/model/GitHub."""
+    from .evaluation import read_evaluation_json, run_evaluation
+
+    report = run_evaluation(image, read_evaluation_json(candidates) if candidates else None)
+    if output.is_symlink():
+        raise ContributorError("evaluation output cannot be linked")
+    atomic_write(output, json.dumps(report, ensure_ascii=False, indent=2).encode())
+    output.chmod(0o600)
+    emit({"report": str(output.resolve()), "metrics": report["metrics"], "scope": report["scope"]})
+    if report["metrics"]["matching_decisions"] != report["metrics"]["cases"]:
+        raise typer.Exit(1)
+
+
+@app.command("evaluation-compare")
+def compare_evaluations(before: Path, after: Path):
+    """Compare matching frozen-corpus reports without invoking models or Docker."""
+    from .evaluation import compare_reports, read_evaluation_json
+
+    emit(compare_reports(read_evaluation_json(before), read_evaluation_json(after)))
+
+
 @desktop_app.command("stopped")
 def desktop_stopped(ticket: str, config: ConfigOption = None,
                     thread_id: Annotated[str | None, typer.Option("--thread-id")] = None,
