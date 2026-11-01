@@ -13,6 +13,7 @@ from oss_contributor.desktop import Desktop, Handoff, install_skill
 from oss_contributor.models import Assessment, Repair, ReviewEvent
 from oss_contributor.process import ContributorError, RateLimited
 from oss_contributor.store import Store
+from oss_contributor.worker_tools import WorkerTools
 
 
 def handoff(action, **updates):
@@ -42,10 +43,21 @@ def complete(desktop, action, tmp_path, **updates):
         or "native-" + action["ticket"]
     )
     desktop.attach(action["ticket"], thread_id)
+    if (updates.get("outcome", "fixed") == "fixed"
+        and not desktop.store.desktop_job(action["ticket"])["data"].get("thread_stopped")):
+        monitored_read(desktop, action)
     desktop.confirm_stopped(action["ticket"], thread_id)
     path = Path(action["handoff_path"])
     path.write_text(handoff(action, **updates).model_dump_json())
     return desktop.finish(action["ticket"], path), path
+
+
+def monitored_read(desktop, action):
+    from conftest import FixtureSandbox
+
+    with WorkerTools(action["job_path"], github=desktop.engine.github,
+                     sandbox_factory=FixtureSandbox) as worker:
+        worker.tool("repo_read", {"path": "calc.py"})
 
 
 def test_automatic_discovery_dispatch_resume_and_verified_publication(rig, tmp_path):
@@ -134,7 +146,7 @@ def test_expired_chat_keeps_slot_until_termination_is_confirmed(rig):
     rig[1].set_meta("paused", "")  # Resume cannot release an unconfirmed native chat.
     assert desktop.tick()["action"] == "cancel"
     assert rig[1].usage()["attempts"] == 1
-    assert rig[1].usage()["model_seconds"] == rig[0].limits.task_seconds
+    assert rig[1].usage()["model_seconds"] == job["data"]["reserved_seconds"]
     desktop.confirm_stopped(action["ticket"], "native-chat-1")
     assert not rig[1].desktop_jobs()
     assert len(rig[1].notifications()) == 1

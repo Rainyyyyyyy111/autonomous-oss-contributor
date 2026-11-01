@@ -7,7 +7,10 @@ from zoneinfo import ZoneInfo
 
 from pydantic import Field, field_validator
 
+from .accounting import MeteringPolicy
 from .models import StrictModel
+from .retries import RetryPolicy
+from .tool_guard import ToolPolicy
 
 
 def default_home() -> Path:
@@ -15,6 +18,9 @@ def default_home() -> Path:
 
 
 class Limits(StrictModel):
+    finalization_seconds: int = Field(300, ge=0, le=1800)
+    tools: ToolPolicy = Field(default_factory=ToolPolicy)
+    retries: RetryPolicy = Field(default_factory=RetryPolicy)
     attempts_per_day: int = Field(3, ge=1, le=100)
     prs_per_day: int = Field(1, ge=1, le=20)
     task_seconds: int = Field(1800, ge=1, le=7200)
@@ -92,6 +98,7 @@ class Config(StrictModel):
     timezone: str = "Asia/Singapore"
     codex_version: str = "0.140.0"
     model: str | None = None
+    metering: MeteringPolicy = Field(default_factory=MeteringPolicy)
     limits: Limits = Field(default_factory=lambda: Limits())
     discovery: Discovery = Field(default_factory=lambda: Discovery())
     notifications: Notifications = Field(default_factory=lambda: Notifications())
@@ -124,6 +131,7 @@ codex_version = "0.140.0"
 attempts_per_day = 3
 prs_per_day = 1
 task_seconds = 1800
+finalization_seconds = 300  # capped at one third of the attempt; included in task_seconds
 model_seconds_per_day = 7200
 revisions_per_pr = 2
 open_prs = 3
@@ -131,6 +139,29 @@ max_files = 5
 max_lines = 200
 publication_recovery_attempts = 5
 publication_recovery_seconds = 86400
+
+[limits.tools]
+max_steps = 120
+max_repeated_calls = 4
+max_no_progress = 20
+
+[limits.retries]
+max_attempts = 3
+max_retries = 6
+max_elapsed_seconds = 15
+attempt_timeout_seconds = 5
+base_delay_seconds = 0.5
+max_delay_seconds = 2
+
+[metering]
+# Optional observed limits; provider telemetry can arrive after consumption.
+# max_observed_tokens_per_call = 100000
+# max_estimated_usd_per_call = "1.00"
+# Prices are operator-supplied USD estimates per million tokens; no built-in prices.
+# [metering.prices.your-model]
+# input_usd_per_million = "..."
+# cached_input_usd_per_million = "..."
+# output_usd_per_million = "..."
 
 [discovery]
 min_stars = 500

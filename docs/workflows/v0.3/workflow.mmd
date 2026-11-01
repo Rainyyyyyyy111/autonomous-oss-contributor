@@ -1,0 +1,15 @@
+flowchart TD
+    PIN["WF-06 固定票据、期限与工具保护策略"] --> CALL["WF-07 实际工具调用"]
+    CALL --> PRE{"已阻止、未完成调用、重复或总步数上限？"}
+    PRE -->|是| STOP["保存原因；原生进入取消，standalone 退出会话"]
+    PRE -->|否| RESERVE["执行前持久预留步数与 pending"]
+    RESERVE --> RUN["执行受限工具；采集实际结果和工作区摘要"]
+    RUN --> POST{"连续无进展达到上限？"}
+    POST -->|否| NEXT{"继续或交接？"}
+    NEXT -->|继续| CALL
+    NEXT -->|完成| HANDOFF["WF-08 检查活动完整性与原生停止确认"]
+    POST -->|是| STOP
+    STOP --> CONFIRM["WF-02 原生确认停止前保留预留与串行位"]
+    CONFIRM --> ATTENTION["记录失败或需要关注；不自动替换聊天"]
+    HANDOFF --> VERIFY["WF-09 沿用独立红绿与完整检查"]
+    VERIFY --> PUBLISH["WF-10 / WF-11 沿用发布前检查和发布恢复"]

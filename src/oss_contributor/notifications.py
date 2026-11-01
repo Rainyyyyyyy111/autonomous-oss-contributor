@@ -10,6 +10,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from .errors import classify_error
 from .process import ContributorError, RateLimited, run_command
 
 if TYPE_CHECKING:
@@ -211,15 +212,21 @@ class NotificationWatcher:
                     )),
                     "github_notifications_last_poll": str(time.time()),
                     "github_notifications_error": "",
+                    "github_notifications_error_info": "",
                 }.items():
                     self.store.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, value))
             decisions += self.observe(targets)
             return {"state": "not_modified" if batch.not_modified else "polled", "decisions": decisions}
         except RateLimited as exc:
+            self.store.set_meta("github_notifications_error_info", classify_error(exc).model_dump_json())
             self.store.set_meta("github_retry_after", str(time.time() + exc.seconds))
             return {"state": "backoff", "decisions": [], "reason": str(exc)}
         except (ContributorError, OSError, ValueError) as exc:
             reason = str(exc)[:1000]
+            info = classify_error(exc)
+            self.store.set_meta("github_notifications_error_info", info.model_dump_json())
+            if info.action == "pause":
+                self.store.pause("notification authentication or quota blocked")
             self.store.set_meta("github_notifications_error", reason)
             delay = max(
                 600, self.config.notifications.poll_seconds,
@@ -228,6 +235,6 @@ class NotificationWatcher:
             self.store.set_meta("github_notifications_next_poll", str(time.time() + delay))
             self.store.notify(
                 "github-notifications-error:" + hashlib.sha256(reason.encode()).hexdigest(),
-                kind="needs_attention", reason=reason,
+                kind="needs_attention", reason=reason, error=info.model_dump(mode="json"),
             )
             return {"state": "error", "decisions": [], "reason": reason}

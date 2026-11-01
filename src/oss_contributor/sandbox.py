@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Repository
+from .errors import Cancelled, EnvironmentFailure, InvalidArguments, PermissionDenied
 from .models import CommandResult
 from .process import ContributorError, run_command
 from .safety import BINARY_PREFIX, MAX_ARCHIVE, PROTECTED, is_test, safe_path
@@ -49,7 +50,7 @@ class DockerSandbox:
     def remaining(self) -> float:
         left = self.deadline - time.monotonic()
         if left <= 0:
-            raise ContributorError("task deadline exceeded")
+            raise Cancelled("task deadline exceeded")
         return left
 
     def docker(
@@ -230,7 +231,7 @@ class DockerSandbox:
                 result = self.command(argv, installation=True)
                 results.append(result)
                 if result.code:
-                    raise ContributorError(
+                    raise EnvironmentFailure(
                         f"dependency installation failed: {result.output[-3000:]}"
                     )
         return results
@@ -242,7 +243,7 @@ class DockerSandbox:
             or not re.fullmatch(r"[A-Za-z0-9_/.-]+", argv[0])
             or any("\x00" in arg or len(arg) > 10_000 for arg in argv)
         ):
-            raise ContributorError("invalid container command")
+            raise InvalidArguments("invalid container command")
         args = ["exec", "--workdir", "/work"]
         if installation:
             args += [
@@ -287,6 +288,8 @@ class DockerSandbox:
         return self.bridge("write", changes=changes)
 
     def tool(self, name: str, arguments: dict, *, writable: bool = False) -> Any:
+        if name == "repo_apply" and not writable:
+            raise PermissionDenied("source edits are disabled in this stage")
         if name == "repo_list" and arguments == {}:
             return self.bridge("list")
         if name == "repo_read" and set(arguments) == {"path"}:
@@ -298,22 +301,24 @@ class DockerSandbox:
             if not isinstance(arguments["argv"], list) or not all(
                 isinstance(x, str) for x in arguments["argv"]
             ):
-                raise ContributorError("argv must be an array of strings")
+                raise InvalidArguments("argv must be an array of strings")
             return self.command(arguments["argv"]).model_dump()
         if name == "repo_apply" and writable and set(arguments) == {"changes"}:
             changes = arguments["changes"]
             if not isinstance(changes, dict) or len(changes) > 5:
-                raise ContributorError("invalid changes")
+                raise InvalidArguments("invalid changes")
             for path, content in changes.items():
                 safe_path(path)
                 if PROTECTED.search(path) or is_test(path) or not path.endswith(".py"):
-                    raise ContributorError(
+                    raise PermissionDenied(
                         "agent may only edit Python source, not tests or configuration"
                     )
                 if content is not None and not isinstance(content, str):
-                    raise ContributorError("invalid content")
+                    raise InvalidArguments("invalid content")
             return self.apply(changes)
-        raise ContributorError(f"tool is not authorized: {name}")
+        if name in {"repo_list", "repo_read", "repo_search", "sandbox_exec", "repo_apply"}:
+            raise InvalidArguments("invalid arguments for repository tool")
+        raise PermissionDenied(f"tool is not authorized: {name}")
 
     def _cleanup(self, *args):
         run_command(["docker", *args], timeout=10)

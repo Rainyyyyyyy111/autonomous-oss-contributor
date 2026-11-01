@@ -10,14 +10,28 @@ import tempfile
 import threading
 import time
 import tomllib
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
 from . import __version__
+from .accounting import Accounting, UsageObservation, digest
 from .config import Config
+from .errors import (
+    AuthenticationBlocked,
+    Cancelled,
+    EnvironmentFailure,
+    FatalOperationError,
+    InvalidArguments,
+    PermissionDenied,
+    ProtocolFailure,
+    classify_error,
+)
 from .process import ContributorError, QuotaExhausted, run_command
+from .retries import retry_read
+from .tool_guard import ExecutionLimitExceeded, ToolGuard
 
 T = TypeVar("T", bound=BaseModel)
 INSTRUCTIONS = """You diagnose small Python bugs for an OSS contributor controller.
@@ -126,15 +140,17 @@ class RPC:
     def receive(self) -> dict:
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
-            raise ContributorError("Codex deadline exceeded")
+            raise Cancelled("Codex deadline exceeded")
         try:
             message = self.inbox.get(timeout=remaining)
         except queue.Empty:
-            raise ContributorError("Codex deadline exceeded") from None
+            raise Cancelled("Codex deadline exceeded") from None
         if message is None:
-            raise ContributorError("Codex app-server disconnected")
+            raise ProtocolFailure("Codex app-server disconnected")
+        if not isinstance(message, dict):
+            raise ProtocolFailure("invalid Codex protocol frame")
         if "fatal" in message:
-            raise ContributorError(message["fatal"])
+            raise ProtocolFailure(message["fatal"])
         if "method" in message and "id" in message:
             if message["method"] != "item/tool/call" or self.tool_handler is None:
                 self.send(
@@ -146,8 +162,10 @@ class RPC:
                         },
                     }
                 )
-                raise ContributorError(f"unauthorized Codex request: {message['method']}")
-            params = message["params"]
+                raise PermissionDenied(f"unauthorized Codex request: {message['method']}")
+            params = message.get("params")
+            if not isinstance(params, dict) or not {"tool", "arguments"} <= params.keys():
+                raise ProtocolFailure("invalid Codex tool request")
             try:
                 result = self.tool_handler(params["tool"], params["arguments"])
                 response = {
@@ -159,10 +177,15 @@ class RPC:
                         }
                     ],
                 }
+            except FatalOperationError:
+                raise
             except (ContributorError, ValueError, TypeError) as exc:
                 response = {
                     "success": False,
-                    "contentItems": [{"type": "inputText", "text": str(exc)}],
+                    "contentItems": [{"type": "inputText", "text": json.dumps({
+                        "error": classify_error(exc).model_dump(mode="json"),
+                        "message": str(exc)[:2000],
+                    })}],
                 }
             self.send({"id": message["id"], "result": response})
         if message.get("method") in {"item/started", "item/completed"}:
@@ -176,7 +199,7 @@ class RPC:
                 "imageView",
                 "computerUse",
             }:
-                raise ContributorError(f"unexpected native Codex capability: {kind}")
+                raise PermissionDenied(f"unexpected native Codex capability: {kind}")
         return message
 
     def request(self, method: str, params: dict) -> Any:
@@ -196,11 +219,35 @@ class RPC:
 class Codex:
     def __init__(self, config: Config):
         self.config = config
+        self.tool_guard: ToolGuard | None = None
+        self.tool_check = lambda: None
+        self.accounting: Accounting | None = None
+        self.call_id: str | None = None
+
+    @contextmanager
+    def metered(self, accounting: Accounting, call_id: str):
+        previous = self.accounting, self.call_id
+        self.accounting, self.call_id = accounting, call_id
+        try:
+            yield
+        finally:
+            self.accounting, self.call_id = previous
+
+    @contextmanager
+    def guarded(self, guard: ToolGuard, check=lambda: None):
+        previous, previous_check = self.tool_guard, self.tool_check
+        self.tool_guard = guard
+        self.tool_check = check
+        try:
+            yield
+        finally:
+            self.tool_guard = previous
+            self.tool_check = previous_check
 
     def version_check(self):
         result = run_command(["codex", "--version"], check=True)
         if result.output.strip() != f"codex-cli {self.config.codex_version}":
-            raise ContributorError(
+            raise EnvironmentFailure(
                 f"Codex version must be pinned to {self.config.codex_version}; found {result.output.strip()}"
             )
 
@@ -214,7 +261,7 @@ class Codex:
             auth_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
             auth = auth_home / "auth.json"
             if not auth.is_file():
-                raise ContributorError(
+                raise AuthenticationBlocked(
                     "file-backed Codex login is required; no auth cache will be exported"
                 )
             auth = auth.resolve()
@@ -337,6 +384,10 @@ goals = false
         )
         if result.get("environments", []) != []:
             raise ContributorError("Codex unexpectedly enabled an execution environment")
+        if self.accounting is not None and self.call_id is not None:
+            self.accounting.bind(self.call_id, result["thread"]["id"],
+                                 result.get("model") if isinstance(result.get("model"), str) else None,
+                                 requested_model=model, provider=result.get("modelProvider"))
         return result["thread"]["id"]
 
     def probe(self) -> dict:
@@ -352,15 +403,34 @@ goals = false
     ) -> T:
         specifications = tools(writable) if sandbox is not None else []
         allowed = {tool["name"] for tool in specifications}
+        guard = self.tool_guard or ToolGuard(self.config.limits.tools)
 
         def callback(name, arguments):
-            if name not in allowed or not isinstance(arguments, dict):
-                raise ContributorError("tool not in this stage's allowlist")
-            return sandbox.tool(name, arguments, writable=writable)
+            def attempt(end):
+                previous_deadline = sandbox.deadline if sandbox else None
+                if sandbox and end is not None:
+                    sandbox.deadline = min(previous_deadline, end)
+                try:
+                    def execute():
+                        if name not in allowed:
+                            raise PermissionDenied("tool not in this stage's allowlist")
+                        if not isinstance(arguments, dict):
+                            raise InvalidArguments("tool arguments must be an object")
+                        return sandbox.tool(name, arguments, writable=writable)
+
+                    return guard.run(name, arguments, execute, sandbox.snapshot if sandbox else lambda: {})
+                finally:
+                    if sandbox:
+                        sandbox.deadline = previous_deadline
+
+            return retry_read(attempt, safe=name in {"repo_list", "repo_read", "repo_search"},
+                              policy=self.config.limits.retries,
+                              reserve=lambda: guard.reserve_retry(self.config.limits.retries),
+                              deadline=deadline, check=self.tool_check, on_error=guard.record_error)
 
         with self._session(deadline, callback) as (rpc, cwd):
             thread_id = self._thread(rpc, cwd, specifications)
-            rpc.request(
+            reply = rpc.request(
                 "turn/start",
                 {
                     "threadId": thread_id,
@@ -369,10 +439,31 @@ goals = false
                     "outputSchema": strict_schema(schema),
                 },
             )
+            turn_id = (reply.get("turn") or {}).get("id") if isinstance(reply, dict) else None
             messages = rpc.notifications
             final_messages: list[str] = []
             while True:
                 notification = messages.pop(0) if messages else rpc.receive()
+                if notification.get("method") == "thread/tokenUsage/updated":
+                    params = notification.get("params", {})
+                    if params.get("threadId") != thread_id or (
+                        turn_id is not None and params.get("turnId") != turn_id
+                    ):
+                        raise ProtocolFailure("usage notification belongs to another thread/turn")
+                    if self.accounting is not None and self.call_id is not None:
+                        try:
+                            raw = params["tokenUsage"]["total"]
+                            if raw["totalTokens"] != raw["inputTokens"] + raw["outputTokens"]:
+                                raise ValueError("inconsistent total tokens")
+                            observation = UsageObservation(
+                                event_id="usage:" + digest([params["turnId"], raw]), thread_id=thread_id,
+                                input_tokens=raw["inputTokens"], cached_input_tokens=raw["cachedInputTokens"],
+                                output_tokens=raw["outputTokens"], reasoning_output_tokens=raw["reasoningOutputTokens"],
+                            )
+                        except (ValueError, TypeError, KeyError):
+                            raise ProtocolFailure("invalid cumulative usage notification") from None
+                        if self.accounting.observe(self.call_id, observation)["limit_reached"]:
+                            raise ExecutionLimitExceeded("observed model usage limit reached")
                 if notification.get("method") == "item/completed":
                     item = notification.get("params", {}).get("item", {})
                     if item.get("type") == "agentMessage":
@@ -387,6 +478,13 @@ goals = false
                             raise QuotaExhausted("Codex account quota exhausted")
                     continue
                 turn = notification["params"]["turn"]
+                if self.accounting is not None and self.call_id is not None and turn.get("status") == "completed":
+                    data = self.accounting.get(self.call_id)["data"]
+                    if data["usage"] is not None:
+                        self.accounting.observe(self.call_id, UsageObservation(
+                            event_id="completed:" + str(turn.get("id", turn_id or "turn")),
+                            thread_id=thread_id, final=True, **data["usage"],
+                        ))
                 if turn["status"] != "completed":
                     text = str(turn.get("error", "Codex turn failed"))
                     if any(
@@ -399,5 +497,8 @@ goals = false
                 ]
                 final = final or final_messages
                 if not final:
-                    raise ContributorError("Codex returned no structured final response")
-                return schema.model_validate_json(final[-1])
+                    raise ProtocolFailure("Codex returned no structured final response")
+                try:
+                    return schema.model_validate_json(final[-1])
+                except ValueError:
+                    raise ProtocolFailure("Codex returned invalid structured final response") from None

@@ -29,6 +29,7 @@ A default empty allowlist authorizes no publication. The initial policy/configur
 | `desktop tick` | Reconcile verified publications, observe current-head PR evidence, automatically select an eligible issue or revision, reserve budgets and persist one dispatch |
 | `desktop attach TICKET THREAD_ID` | Bind the returned native chat to that dispatch; refuse another chat binding |
 | `desktop checkpoint TICKET CURSOR` | Persist compact wait progress so a restart resumes the same chat |
+| `desktop usage TICKET USAGE_PATH` | Import actual coordinator-observed cumulative usage for the attached thread from its assigned file; never synthesize missing telemetry |
 | `desktop stopped TICKET --thread-id THREAD_ID` | Record the coordinator's actual native terminal observation before collecting a handoff or settling cancellation |
 | `desktop finish TICKET HANDOFF_PATH` | Validate the worker schema/identity, re-read policy/conflicts, independently run clean-container regression/full-suite checks and automatically publish |
 | `desktop fail TICKET REASON [--quota]` | Preserve a concrete blocker, settle usage, pause on quota exhaustion; no blind replacement chat |
@@ -62,6 +63,31 @@ The feed cursor and pending inbox commit together before PR observation, so a fa
 This is near-real-time observation, not a webhook or an always-running model session. Default detection is approximately one minute plus API/lock delays; machine sleep, throttling and outages increase it. The native heartbeat still defaults to ten minutes, so complex model judgement waits for that coordinator and its budgets. The listener itself can run while the App is closed, but cannot create native chats until the App coordinator runs. Repository-owner webhook deployment would require separate hosting/permissions and is not configured here.
 
 ## Recovery and stopping
+
+Workflow v0.5 adds `worker_expires`, keeping a default 300 seconds inside the existing 1800-second attempt for handoff and independent validation (at most one third for short attempts). WorkerTools and coordinator waits use the earlier deadline; expired workers enter confirmed cancellation without extending the original deadline. A stop first observed after the worker deadline is conservatively refused for publication. New job refunds account for worker time up to confirmed stop and keep the original reservation day even across midnight; legacy tickets retain their prior settlement rules.
+
+Each dispatch freezes the original prompt and exact-input/schema/implementation hashes. `accounting` reports scoped local call evidence, requested/observed model names, cumulative token coverage and USD estimates only with operator-supplied model prices. The App may expose neither immutable model identity nor usage; missing evidence stays unknown and partial evidence stays partial. A coordinator can import real cumulative telemetry through `desktop usage` at the assigned regular-file path using the strict `UsageObservation` schema; this is trusted coordinator reporting, not independent attestation. Enabled observed caps block a handoff with missing final evidence and request cancellation when exceeded; they may overshoot before telemetry and are not provider-enforced prepaid limits. See [v0.5](workflows/v0.5/README.md).
+
+
+Workflow v0.4 pins a `retry_policy` on new dispatches. WorkerTools retries only explicitly safe reads for trusted transient errors, with shared persisted allowance; retry attempts also consume tool guard limits. Defaults are three total attempts, five seconds per attempt within fifteen seconds, six extra attempts per ticket, and exponential full jitter capped at two seconds. The earlier task/model deadline always wins. Legacy tool-monitored jobs without this policy get no new automatic retries. Parameter mistakes can be corrected; fatal classification or retry exhaustion follows confirmed cancellation. Do not wrap WorkerTools in another retry loop or replay commands, installations, tests, edits or model sessions. GitHub mutations use no wire retries; verified uncertain effects retain bounded remote reconciliation, while known permanent errors retain artifacts and require attention. See [classification and exact scope](workflows/v0.4/README.md).
+
+New Workflow v0.3 dispatches include a pinned `tool_policy`. Workers use the monitored Python toolbox for repository work:
+
+```python
+from oss_contributor.worker_tools import WorkerTools
+
+with WorkerTools(assigned_job_path) as worker:
+    worker.install()  # configured dependency commands, inside Docker
+    source = worker.tool("repo_read", {"path": "package/module.py"})
+    # Other operations: repo_list, repo_search, repo_apply, sandbox_exec.
+    # regression_write {"content": ...} writes only the assigned immutable test.
+    # repo_restore_prior {} restores the pinned patch for a revision.
+    candidate = worker.snapshot()
+```
+
+The controller counts workspace opens, installations, snapshots and attempted tools, including errors; internal Docker plumbing, waits and independent validation are excluded. Defaults are 120 steps, four identical requests per workspace digest, and 20 consecutive calls without novel successful nonempty results or a previously unseen workspace digest. Reaching the repeat/step limit prevents the next operation; reaching the no-progress limit stops after observing that operation. Hashes, counters, an in-flight marker and a sticky stop reason persist across toolbox contexts/restarts. Do not treat new stdout or file bytes as proof of a useful repair.
+
+A blocked job enters `cancelling`, emits a durable notice, cannot publish a handoff, and retains its budget/slot until the coordinating App confirms termination. A crashed in-flight call cannot be silently rerun; reopening blocks it, and an incomplete handoff fails closed. New fixed handoffs need recorded completed toolbox activity. Description-only revisions need no target execution; legacy jobs lacking `tool_policy` retain their prior validation protocol without fabricated activity. Native host tools remain available outside the toolbox; this detects monitored repository calls, not arbitrary App activity or reasoning steps. Source/skill updates do not upgrade an installed skill or change a running service automatically.
 
 - Before creating a chat, reconcile the exact deterministic title/ticket against native App history. If creation succeeded before binding, attach that chat. Ambiguous/lost creation results need attention; never retry chat creation blindly.
 - One chat is active at a time. An expired or failed lease retains the serial slot in `cancelling` until its old chat is confirmed stopped; pause/resume cannot bypass this. Pending creation must be reconciled, then an existing chat can be bound for cancellation even after expiry. Only confirmed absence permits `desktop stopped TICKET --not-created`. Failed 0.2 leases lacking a native terminal record are conservatively reconciled without a second refund. Interrupted, unverified work cannot publish. Unused reserved model time is refunded once; expiration conservatively consumes the reserved budget.

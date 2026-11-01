@@ -92,8 +92,12 @@ def test_description_cannot_consume_failed_ci_feedback(rig, tmp_path, kind):
 
 
 def test_description_outcome_rejects_hidden_file_changes_or_initial_submission(rig, tmp_path):
+    from test_desktop import monitored_read
+
     desktop = Desktop(rig[4])
     first = desktop.tick()
+    desktop.attach(first["ticket"], "native-description-rejection")
+    monitored_read(desktop, first)
     with pytest.raises(ContributorError, match="requires a revision"):
         complete(desktop, first, tmp_path, outcome="description", changes={})
     complete(desktop, first, tmp_path)

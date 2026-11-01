@@ -123,6 +123,8 @@ def test_fixed_monitor_rejects_foreign_chat_tickets_without_settling_them(rig, t
 
 
 def test_native_handoff_requires_explicit_terminal_confirmation(rig, tmp_path):
+    from test_desktop import monitored_read
+
     desktop = Desktop(rig[4])
     action = desktop.tick()
     desktop.attach(action["ticket"], "native-1")
@@ -133,6 +135,7 @@ def test_native_handoff_requires_explicit_terminal_confirmation(rig, tmp_path):
     assert not rig[2].published
     with pytest.raises(ContributorError, match="assigned"):
         desktop.confirm_stopped(action["ticket"], "wrong-chat")
+    monitored_read(desktop, action)
     desktop.confirm_stopped(action["ticket"], "native-1")
     desktop.finish(action["ticket"], path)
     assert len(rig[2].published) == 1

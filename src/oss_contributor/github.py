@@ -6,15 +6,26 @@ import json
 import re
 import time
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
+from math import ceil
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 from .config import Discovery
+from .errors import (
+    AuthenticationBlocked,
+    Cancelled,
+    InvalidArguments,
+    ProtocolFailure,
+    RemoteRejected,
+    TransientFailure,
+)
 from .models import Issue, NotificationBatch, PRState, ReviewEvent
 from .process import ContributorError, PublicationConflict, RateLimited, run_bytes, run_command
+from .retries import RetryBudget, RetryPolicy, retry_read
 from .safety import MAX_ARCHIVE, STOP, unpack_archive
 
 ISSUE_QUERY = """query($owner:String!,$name:String!,$number:Int!){
@@ -34,6 +45,11 @@ class GitHub:
         self.timezone = timezone
         self.deadline: float | None = None
         self.before_write: Callable[[], None] | None = None
+        self.before_read: Callable[[], Any] | None = None
+        self.retry_policy = RetryPolicy()
+        self.retry_budget = RetryBudget(self.retry_policy)
+        self.reserve_retry: Callable[[], bool] | None = None
+        self.on_error: Callable | None = None
         self.response_headers: dict[str, str] = {}
         self.response_status: int = 0
         self.notification_poll_interval: int = 60
@@ -52,15 +68,32 @@ class GitHub:
             return maximum
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
-            raise ContributorError("GitHub task deadline exceeded")
+            raise Cancelled("GitHub task deadline exceeded")
         return min(maximum, remaining)
 
     def api(
         self, endpoint: str, *, method: str = "GET", data: dict | None = None,
         headers: dict[str, str] | None = None,
     ) -> Any:
-        if method != "GET" and endpoint != "graphql" and self.before_write:
+        safe = method == "GET" and endpoint != "graphql" or (
+            method == "POST" and endpoint == "graphql" and data is not None
+            and data.get("query") == ISSUE_QUERY
+        )
+
+        def operation(deadline):
+            with self.bounded(deadline) if deadline is not None else nullcontext():
+                return self._api_once(endpoint, method=method, data=data, headers=headers, safe=safe)
+
+        return retry_read(operation, safe=safe, policy=self.retry_policy,
+                          reserve=self.reserve_retry or self.retry_budget.reserve,
+                          deadline=self.deadline, check=(self.before_read or (lambda: None)) if safe else lambda: None,
+                          on_error=self.on_error or (lambda info: None))
+
+    def _api_once(self, endpoint: str, *, method: str, data: dict | None,
+                  headers: dict | None, safe: bool):
+        if not safe and self.before_write:
             self.before_write()
+        self.response_headers, self.response_status = {}, 0
         argv = ["gh", "api", "--include", "--method", method, endpoint]
         for key, value in (headers or {}).items():
             argv += ["--header", f"{key}: {value}"]
@@ -85,29 +118,48 @@ class GitHub:
         self.response_status = int(statuses[-1]) if statuses else 0
         if self.response_status == 304:
             return None
-        if result.code:
+        if result.code or self.response_status >= 400:
             if (
-                "rate limit" in result.output.lower()
-                or "HTTP 429" in result.output
-                or re.search(r"(?im)^retry-after:", header)
+                self.response_status == 429
+                or self.response_status == 403 and self.response_headers.get("x-ratelimit-remaining") == "0"
+                or self.response_status in {403, 408, 500, 502, 503, 504}
+                and "retry-after" in self.response_headers
             ):
-                retry = re.search(r"(?im)^retry-after:\s*(\d+)", header)
-                reset = re.search(r"(?im)^x-ratelimit-reset:\s*(\d+)", header)
+                retry_value = self.response_headers.get("retry-after", "")
+                retry = re.fullmatch(r"\d+", retry_value)
+                reset_value = self.response_headers.get("x-ratelimit-reset", "")
+                reset = re.fullmatch(r"\d+", reset_value)
                 wait = (
-                    int(retry[1])
+                    int(retry_value)
                     if retry
-                    else max(60, int(reset[1]) - int(time.time()))
+                    else max(60, int(reset_value) - int(time.time()))
                     if reset
                     else 600
                 )
+                if retry_value and not retry:
+                    try:
+                        stamp = parsedate_to_datetime(retry_value)
+                        if stamp.tzinfo is not None:
+                            wait = max(0, ceil(stamp.timestamp() - time.time()))
+                    except (ValueError, TypeError, OverflowError):
+                        pass
                 raise RateLimited(wait)
-            raise ContributorError(f"GitHub {method} {endpoint}: {result.output[-1500:]}")
+            status = self.response_status
+            if status in {401, 403}:
+                raise AuthenticationBlocked(f"GitHub authentication/permission blocked (HTTP {status})")
+            if status in {408, 500, 502, 503, 504}:
+                raise TransientFailure(f"GitHub temporary read/transport failure (HTTP {status})")
+            if status in {400, 422}:
+                raise InvalidArguments(f"GitHub request rejected (HTTP {status})")
+            if status in {409, 412}:
+                raise PublicationConflict(f"GitHub conflict (HTTP {status})")
+            raise RemoteRejected(status)
         if not match:
             return None
         try:
             return json.loads(result.output[match[0].start() :])
         except ValueError:
-            raise ContributorError("GitHub returned invalid or oversized JSON evidence") from None
+            raise ProtocolFailure("GitHub returned invalid or oversized JSON evidence") from None
 
     def login(self) -> str:
         if self._login is None:
@@ -320,17 +372,24 @@ class GitHub:
 
     def snapshot(self, repo: str, sha: str) -> dict[str, str]:
         if not re.fullmatch(r"[a-f0-9]{40}", sha):
-            raise ContributorError("invalid base SHA")
-        code, payload, _ = run_bytes(
-            ["gh", "api", f"repos/{repo}/tarball/{sha}"],
-            timeout=self.timeout(120),
-            max_output=MAX_ARCHIVE,
-            reject_truncation=True,
-            merge_stderr=False,
-        )
-        if code:
-            raise ContributorError("repository download failed")
-        return unpack_archive(payload)
+            raise InvalidArguments("invalid base SHA")
+
+        def operation(deadline):
+            with self.bounded(deadline):
+                code, payload, _ = run_bytes(
+                    ["gh", "api", f"repos/{repo}/tarball/{sha}"],
+                    timeout=self.timeout(120), max_output=MAX_ARCHIVE,
+                    reject_truncation=True, merge_stderr=False,
+                )
+            if code:
+                # Without trusted HTTP headers the failure is unknown, not guessed transient.
+                raise ContributorError("repository download failed")
+            return unpack_archive(payload)
+
+        return retry_read(operation, safe=True, policy=self.retry_policy,
+                          reserve=self.reserve_retry or self.retry_budget.reserve,
+                          deadline=self.deadline, check=self.before_read or (lambda: None),
+                          on_error=self.on_error or (lambda info: None))
 
     def _pages(self, endpoint: str) -> list[dict]:
         result = []

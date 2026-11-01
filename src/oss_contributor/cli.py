@@ -408,6 +408,22 @@ def desktop_checkpoint(ticket: str, cursor: str, config: ConfigOption = None):
     native_call(config, "checkpoint", ticket, cursor)
 
 
+@desktop_app.command("usage")
+def desktop_usage(ticket: str, observation: Path, config: ConfigOption = None):
+    """Coordinator only: record actually observed App cumulative usage, never worker claims."""
+    native_call(config, "record_usage", ticket, observation)
+
+
+@app.command("accounting")
+def accounting_report(config: ConfigOption = None):
+    """Read local model provenance/usage; missing telemetry and prices stay unknown."""
+    store = Store(load(config))
+    try:
+        emit(Desktop(Engine(store.config, store)).accounting_report())
+    finally:
+        store.close()
+
+
 @desktop_app.command("stopped")
 def desktop_stopped(ticket: str, config: ConfigOption = None,
                     thread_id: Annotated[str | None, typer.Option("--thread-id")] = None,

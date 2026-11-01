@@ -3,11 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from contextlib import nullcontext
 
+from .accounting import Accounting, finalization_reserve, provenance
 from .codex import Codex
 from .config import Config, Repository
+from .errors import Cancelled, ValidationFailure, classify_error, publication_recoverable
 from .github import GitHub
 from .learning import LearningMemory
 from .models import (
@@ -21,10 +24,12 @@ from .models import (
     ValidationReport,
 )
 from .process import ContributorError, PublicationConflict, QuotaExhausted, RateLimited
+from .retries import RetryBudget
 from .safety import check_regression, eligibility, validate_changes
 from .sandbox import DockerSandbox
 from .selection import Selector
 from .store import Store
+from .tool_guard import ExecutionLimitExceeded, ToolGuard
 
 OPEN = (
     "open",
@@ -72,32 +77,41 @@ def check_junit(sandbox, expect_failure: bool):
         ]
     )
     if result.code:
-        raise ContributorError("regression did not produce JUnit evidence")
+        raise ValidationFailure("regression did not produce JUnit evidence")
     if "<!" in result.output:
-        raise ContributorError("unsafe XML evidence")
+        raise ValidationFailure("unsafe XML evidence")
     try:
         root = ET.fromstring(result.output)
         cases = list(root.iter("testcase"))
     except ET.ParseError:
-        raise ContributorError("invalid regression JUnit report") from None
+        raise ValidationFailure("invalid regression JUnit report") from None
     if not cases or any(list(c.iter("error")) or list(c.iter("skipped")) for c in cases):
-        raise ContributorError("regression has errors, skipped tests or no collected tests")
+        raise ValidationFailure("regression has errors, skipped tests or no collected tests")
     failures = [n for c in cases for n in c.iter("failure")]
     if expect_failure:
         if not failures or any("AssertionError" not in (n.text or "") for n in failures):
-            raise ContributorError("original-code regression must fail on a real assertion")
+            raise ValidationFailure("original-code regression must fail on a real assertion")
     elif failures:
-        raise ContributorError("regression assertions still fail")
+        raise ValidationFailure("regression assertions still fail")
 
 
 class Engine:
     def __init__(self, config: Config, store: Store, github=None, codex=None, sandbox_factory=None):
         self.config, self.store = config, store
+        self.accounting = Accounting(store)
+        self.worker_deadline: float | None = None
+        self.model_task: int | None = None
         self.learning = LearningMemory(store)
         self.selector = Selector(store)
         self.github = github if github is not None else GitHub(config.timezone)
         if isinstance(self.github, GitHub):
             self.github.before_write = self.ensure_unpaused
+            self.github.before_read = self.ensure_unpaused
+            self.github.retry_policy = config.limits.retries
+            self.github.retry_budget = RetryBudget(config.limits.retries)
+            self.github.on_error = lambda info: self.store.event(
+                None, "github_error", info.model_dump(mode="json"),
+            )
         self.codex = codex if codex is not None else Codex(config)
         self.owner = hashlib.sha256(str(store.home).encode()).hexdigest()[:20]
         self.cleanup_needed = sandbox_factory is None
@@ -141,20 +155,42 @@ class Engine:
     def model(self, schema, prompt, sandbox, deadline, writable=False):
         if self.store.meta("paused"):
             raise ContributorError("paused by user")
-        available = self.config.limits.model_seconds_per_day - self.store.usage()["model_seconds"]
+        deadline = min(deadline, self.worker_deadline) if self.worker_deadline is not None else deadline
+        day = self.store.day()
+        available = self.config.limits.model_seconds_per_day - self.store.usage(day)["model_seconds"]
         budget = min(deadline - time.monotonic(), available)
-        if budget < 1 or not self.store.reserve("model_seconds", budget):
+        if budget < 1 or not self.store.reserve("model_seconds", budget, day=day):
             raise ContributorError("daily model execution budget exhausted")
-        day, started = self.store.day(), time.monotonic()
+        started = time.monotonic()
+        call_id = uuid.uuid4().hex
+        real = isinstance(self.codex, Codex)
+        from .codex import INSTRUCTIONS, strict_schema, tools
+
+        status = "failed"
+        call_started = False
         try:
-            return self.codex.ask(
-                schema, prompt, sandbox, min(deadline, started + budget), writable
-            )
+            self.accounting.start(call_id, self.model_task or 0, provenance(
+                "standalone" if real else "injected", prompt, requested_model=self.config.model if real else None,
+                instructions=INSTRUCTIONS, tools=tools(writable) if sandbox else [],
+                schema=strict_schema(schema), stage=schema.__name__, protocol_version=self.config.codex_version,
+            ), self.config.metering, day=day)
+            call_started = True
+            with self.codex.metered(self.accounting, call_id) if real else nullcontext():
+                result = self.codex.ask(schema, prompt, sandbox, min(deadline, started + budget), writable)
+            failure = self.accounting.constraint_failure(call_id, require_final=True)
+            if failure:
+                raise ExecutionLimitExceeded(failure)
+            status = "complete"
+            return result
         except QuotaExhausted:
             self.store.set_meta("paused", "Codex quota exhausted; resume after quota is available")
             raise
         finally:
-            self.store.refund_model(day, max(0, budget - (time.monotonic() - started)))
+            try:
+                if call_started:
+                    self.accounting.finish(call_id, status)
+            finally:
+                self.store.refund_model(day, max(0, budget - (time.monotonic() - started)))
 
     def active(self):
         return [
@@ -165,7 +201,7 @@ class Engine:
 
     def ensure_unpaused(self):
         if self.store.meta("paused"):
-            raise ContributorError("worker is paused")
+            raise Cancelled("worker is paused")
 
     def ensure_task_scope(self, task: dict):
         scope = json.loads(self.store.meta("desktop_scope", '{"mode":"autopilot","targets":[]}'))
@@ -184,12 +220,12 @@ class Engine:
         snapshot = sandbox.snapshot()
         for path, content in sandbox.files.items():
             if snapshot.get(path) != content:
-                raise ContributorError(f"installation changed repository file: {path}")
+                raise ValidationFailure(f"installation changed repository file: {path}")
         for argv in repo.tests + repo.checks:
             result = sandbox.command(argv)
             report.commands.append(result)
             if result.code:
-                raise ContributorError("baseline tests/checks failed")
+                raise ValidationFailure("baseline tests/checks failed")
 
     def validate(
         self,
@@ -210,7 +246,7 @@ class Engine:
                 red = clean.command(regression_argv(path))
                 report.commands.append(red)
                 if red.code != 1:
-                    raise ContributorError(
+                    raise ValidationFailure(
                         "regression must fail with pytest exit 1 on original source"
                     )
                 check_junit(clean, expect_failure=True)
@@ -218,22 +254,23 @@ class Engine:
                 green = clean.command(regression_argv(path))
                 report.commands.append(green)
                 if green.code:
-                    raise ContributorError("regression did not pass after applying the fix")
+                    raise ValidationFailure("regression did not pass after applying the fix")
                 check_junit(clean, expect_failure=False)
                 for argv in repo.tests + repo.checks:
                     result = clean.command(argv)
                     report.commands.append(result)
                     if result.code:
-                        raise ContributorError("existing tests/checks failed after fix")
+                        raise ValidationFailure("existing tests/checks failed after fix")
                 after = clean.snapshot()
                 # Untracked caches are ignored by the bridge, never source/test mutations.
                 validated, _, _ = validate_changes(base, after, path, self.config.limits)
                 if validated != accepted:
-                    raise ContributorError("validation mutated the candidate patch")
+                    raise ValidationFailure("validation mutated the candidate patch")
             report.passed = True
             report.evidence_digest = self.validation_digest(repo, sha, accepted, path)
         except ContributorError as exc:
             report.failure = str(exc)
+            report.error = classify_error(exc)
         return report
 
     def validation_digest(self, repo: Repository, sha: str, changes: dict, path: str) -> str:
@@ -251,8 +288,29 @@ class Engine:
 
     def process(self, task: dict, revision_events: list | None = None):
         deadline = time.monotonic() + self.config.limits.task_seconds
-        with self.github.bounded(deadline) if isinstance(self.github, GitHub) else nullcontext():
-            self._process(task, revision_events, deadline)
+        previous_deadline, previous_task = self.worker_deadline, self.model_task
+        self.worker_deadline = deadline - finalization_reserve(
+            self.config.limits.task_seconds, self.config.limits.finalization_seconds,
+        )
+        self.model_task = task["id"]
+        guard = ToolGuard(self.config.limits.tools, save=lambda state: self.store.update(
+            task["id"], tool_activity=state.model_dump(),
+        ))
+        def check_tool():
+            self.ensure_unpaused()
+            current = self.store.get(task["id"])
+            self.ensure_task_scope(current)
+            if current["status"] not in {"running", "revising"}:
+                raise Cancelled("task stopped before tool execution")
+
+        try:
+            with (
+                self.github.bounded(deadline) if isinstance(self.github, GitHub) else nullcontext(),
+                self.codex.guarded(guard, check_tool) if isinstance(self.codex, Codex) else nullcontext(),
+            ):
+                self._process(task, revision_events, deadline)
+        finally:
+            self.worker_deadline, self.model_task = previous_deadline, previous_task
 
     def _process(self, task: dict, revision_events: list | None, deadline: float):
         self.ensure_task_scope(task)
@@ -296,7 +354,7 @@ class Engine:
             )
             if path in base:
                 raise ContributorError("reserved regression path already exists upstream")
-            with self.sandbox(repo, base, deadline) as worker:
+            with self.sandbox(repo, base, min(deadline, self.worker_deadline or deadline)) as worker:
                 report = ValidationReport(base_sha=sha)
                 self.baseline(worker, repo, report)
                 if revision:
@@ -401,7 +459,7 @@ class Engine:
                     raise ContributorError("review/CI feedback produced no new source changes")
             report = self.validate(repo, base, changes, path, sha, deadline)
             if not report.passed:
-                raise ContributorError(report.failure)
+                raise ValidationFailure(report.failure, cause_info=report.error)
             self.store.update(
                 task_id,
                 "validated",
@@ -423,6 +481,10 @@ class Engine:
             self.store.transition(task_id, ("running", "revising", "validated", "publishing"),
                                   "needs_attention", reason=str(exc))
         except (ContributorError, OSError, ValueError) as exc:
+            info = classify_error(exc)
+            self.store.update(task_id, last_error=info.model_dump(mode="json"))
+            if info.action == "pause":
+                self.store.pause("authentication or quota blocked")
             if report is not None and not report.passed:
                 report.failure = str(exc)
                 if revision:
@@ -430,13 +492,15 @@ class Engine:
                 else:
                     self.store.update(task_id, report=report.model_dump())
             current = self.store.get(task_id)
-            if current["status"] in {"publishing", "validated"} and current["data"].get(
+            if publication_recoverable(exc) and current["status"] in {"publishing", "validated"} and current["data"].get(
                 "report", {}
             ).get("passed"):
                 self.store.update(task_id, reason=str(exc), next_reconcile=time.time() + 600)
             else:
-                self.store.update(
-                    task_id, "needs_attention" if revision else "failed", reason=str(exc)
+                self.store.transition(
+                    task_id, ("running", "revising", "validated", "publishing"),
+                    "needs_attention" if revision or current["status"] in {"validated", "publishing"}
+                    else "failed", reason=str(exc),
                 )
 
     @staticmethod
@@ -623,12 +687,13 @@ class Engine:
             data = task["data"]
             if self.github.base(task["repo"])[1] != latest_sha:
                 raise ContributorError("upstream advanced again during verification")
+        publication_day = self.store.day()
         if (
             not data.get("pr")
             and not remote
-            and data.get("publication_reserved") != self.store.day()
+            and data.get("publication_reserved") != publication_day
         ):
-            if not self.store.reserve("publications"):
+            if not self.store.reserve("publications", day=publication_day):
                 self.store.update(
                     task_id,
                     "validated",
@@ -636,7 +701,7 @@ class Engine:
                     next_reconcile=time.time() + 600,
                 )
                 return
-            self.store.update(task_id, publication_reserved=self.store.day())
+            self.store.update(task_id, publication_reserved=publication_day)
         if data.get("pr"):
             current = self.github.pr_state(task["repo"], data["pr"]["number"])
             if current.state != "open" or current.stop:
@@ -727,6 +792,16 @@ class Engine:
                 self.store.transition(task["id"], ("validated", "publishing"),
                                       "needs_attention", reason=str(exc))
             except (ContributorError, OSError, ValueError) as exc:
+                info = classify_error(exc)
+                self.store.update(task["id"], last_error=info.model_dump(mode="json"))
+                if not publication_recoverable(exc):
+                    self.store.transition(task["id"], ("validated", "publishing"),
+                                          "needs_attention", reason=str(exc))
+                    self.store.notify(f"publication-error:{task['id']}", kind="needs_attention",
+                                      task=task["id"], error=info.model_dump(mode="json"))
+                    if info.action == "pause":
+                        self.store.pause("authentication or quota blocked")
+                    continue
                 # Preserve publication intent so a transient failure can reconcile next time.
                 self.store.update(task["id"], reason=str(exc),
                                   next_reconcile=time.time() + min(3600, 600 * 2 ** min(attempts, 3)))

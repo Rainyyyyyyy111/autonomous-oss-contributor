@@ -1,0 +1,22 @@
+flowchart TD
+    PIN["WF-06 固定重试策略与持久额度"] --> CHECK["WF-07 检查范围、暂停、期限与工具保护"]
+    CHECK --> CALL["实际调用；计入工具活动"]
+    CALL --> RESULT{"成功？"}
+    RESULT -->|是| NEXT["继续当前尝试；独立验证门槛不变"]
+    RESULT -->|否| CLASSIFY["可信异常类型 / HTTP 状态分类"]
+    CLASSIFY --> KIND{"类别与调用性质"}
+    KIND -->|明确瞬时故障且安全读取| LIMIT{"次数、窗口、共享额度允许？"}
+    LIMIT -->|是| RESERVE["额外尝试前持久预留；封顶抖动退避"]
+    RESERVE --> CHECK
+    LIMIT -->|否| STOP["停止本次尝试；原生确认停止前保留串行位和预算"]
+    KIND -->|参数错误| CORRECT["返回结构化错误供纠正；不自动重复原参数"]
+    CORRECT --> CHECK
+    KIND -->|限流| WAIT["WF-02 / WF-12 持久服务端退避，不同步长等"]
+    KIND -->|权限、配额、验证、协议、执行保护| STOP
+    KIND -->|写入 / 命令效果不确定| EFFECT["禁止直接重放"]
+    EFFECT --> PUB{"已验证发布意图？"}
+    PUB -->|是| RECONCILE["WF-10 / WF-11 沿用有界远端核对"]
+    PUB -->|否| STOP
+    RECONCILE --> PERMANENT{"明确永久错误？"}
+    PERMANENT -->|是| ATTENTION["保留补丁和报告；需要关注"]
+    PERMANENT -->|否| NEXT

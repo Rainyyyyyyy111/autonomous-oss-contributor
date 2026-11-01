@@ -1,6 +1,6 @@
 # Autonomous OSS Contributor
 
-[English](README.md) · [Workflow v0.2 与变更档案](docs/workflows/README.md) · [桌面自动调度](docs/desktop-workflow.md) · [架构](docs/architecture.md) · [验证范围](docs/validation.md)
+[English](README.md) · [Workflow v0.5 与变更档案](docs/workflows/README.md) · [桌面自动调度](docs/desktop-workflow.md) · [架构](docs/architecture.md) · [验证范围](docs/validation.md)
 
 **配置一次，让 Agent 自动发现、筛选、修复、验证并提交开源贡献，持续跟进 CI 和维护者反馈。** 正常流程不用你挑 Issue、转发提示词、运行测试或点提交。
 

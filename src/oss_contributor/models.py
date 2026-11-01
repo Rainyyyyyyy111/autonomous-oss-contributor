@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from .errors import ErrorInfo
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -80,6 +82,7 @@ class ValidationReport(StrictModel):
     passed: bool = False
     commands: list[CommandResult] = []
     failure: str = ""
+    error: ErrorInfo | None = None
     files: list[str] = []
     added: int = 0
     removed: int = 0

@@ -53,6 +53,12 @@ class Store:
             PRIMARY KEY(task,event));
           CREATE TABLE IF NOT EXISTS pr_outcomes(
             task INTEGER PRIMARY KEY, data TEXT NOT NULL, observed REAL NOT NULL);
+          CREATE TABLE IF NOT EXISTS model_calls(
+            id TEXT PRIMARY KEY, task INTEGER NOT NULL, day TEXT NOT NULL,
+            status TEXT NOT NULL, data TEXT NOT NULL, created REAL NOT NULL, finished REAL);
+          CREATE TABLE IF NOT EXISTS model_usage_events(
+            call_id TEXT NOT NULL, event_id TEXT NOT NULL, digest TEXT NOT NULL,
+            PRIMARY KEY(call_id,event_id));
         """)
 
     def close(self):
@@ -60,6 +66,19 @@ class Store:
 
     def day(self) -> str:
         return datetime.now(ZoneInfo(self.config.timezone)).date().isoformat()
+
+    def visible_task_ids(self) -> set[int]:
+        """Local scope filtering for evidence reports, never publication authorization."""
+        scope = json.loads(self.meta("desktop_scope", '{"mode":"autopilot"}'))
+        visible = set()
+        for task in self.tasks():
+            if self.config.repository(task["repo"]) is None:
+                continue
+            identity = {"task": task["id"], "repo": task["repo"], "issue": task["issue"],
+                        "pr": (task["data"].get("pr") or {}).get("number")}
+            if scope["mode"] != "monitor" or identity in scope["targets"]:
+                visible.add(task["id"])
+        return visible
 
     @contextmanager
     def lock(self):
@@ -162,12 +181,13 @@ class Store:
             )
         self.event(task_id, status or task["status"], data)
 
-    def usage(self) -> dict:
-        row = self.db.execute("SELECT * FROM usage WHERE day=?", (self.day(),)).fetchone()
+    def usage(self, day: str | None = None) -> dict:
+        day = day if day is not None else self.day()
+        row = self.db.execute("SELECT * FROM usage WHERE day=?", (day,)).fetchone()
         return (
             dict(row)
             if row
-            else {"day": self.day(), "attempts": 0, "publications": 0, "model_seconds": 0}
+            else {"day": day, "attempts": 0, "publications": 0, "model_seconds": 0}
         )
 
     def transition(self, task_id: int, allowed: tuple[str, ...], status: str, **data) -> bool:
@@ -197,7 +217,7 @@ class Store:
                     (json.dumps(job["data"]), job["ticket"]),
                 )
 
-    def reserve(self, kind: str, amount: float = 1) -> bool:
+    def reserve(self, kind: str, amount: float = 1, *, day: str | None = None) -> bool:
         caps = {
             "attempts": self.config.limits.attempts_per_day,
             "publications": self.config.limits.prs_per_day,
@@ -205,11 +225,12 @@ class Store:
         }
         if kind not in caps:
             raise ValueError(kind)
+        day = day if day is not None else self.day()
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO usage(day) VALUES(?)", (self.day(),))
+            self.db.execute("INSERT OR IGNORE INTO usage(day) VALUES(?)", (day,))
             cur = self.db.execute(
                 f"UPDATE usage SET {kind}={kind}+? WHERE day=? AND {kind}+?<=?",
-                (amount, self.day(), amount, caps[kind]),
+                (amount, day, amount, caps[kind]),
             )
             return bool(cur.rowcount)
 

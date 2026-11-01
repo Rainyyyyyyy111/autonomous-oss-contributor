@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Keep each budget reservation's local day fixed through usage insertion/update, model accounting, native settlement/refunds and publication metadata, including midnight transitions; refresh native available time after environment preparation. This repairs the existing daily-limit contract without changing limits or runtime scope. See [the budget change record](docs/workflows/changes/2026-11-01-003-finalization-accounting-provenance.md).
+
+
+- Add Workflow v0.5 finalization time within the existing attempt deadline, cumulative observed-token accounting with unknown/partial coverage, pinned operator-supplied price estimates and per-call prompt/schema/model provenance. Preserve native stop confirmation and reject unverifiable configured usage limits. See [CHG-20261101-003](docs/workflows/changes/2026-11-01-003-finalization-accounting-provenance.md).
+
+- Apply Workflow v0.4 error classification and bounded safe-read retries: pin retry policies, cap attempts/time/shared retry allowance, count monitored retries against tool guards, preserve cancellation and prohibit blind replay of mutations, commands, installs, verification or model sessions. Pause on authentication blockers and escalate known permanent publication failures while retaining verified artifacts. See [CHG-20261101-002](docs/workflows/changes/2026-11-01-002-classified-bounded-retries.md).
+
+- Apply Workflow v0.3 tool guards: cap total attempted calls, repeated canonical requests per workspace, and consecutive calls without novel observed evidence; persist native WorkerTools activity and cancellation without releasing reservations before confirmed stop. Standalone limits abort model sessions and span model stages. Preserve legacy-job compatibility, independent verification and authorization; native host-tool bypass remains a documented limitation. See [CHG-20261101-001](docs/workflows/changes/2026-11-01-001-tool-activity-guards.md).
+
 - Apply Workflow v0.2 controls: bind independent validation to patch/configuration inputs; revalidate legacy or stale source evidence; bound publication recovery with persistent attempts, a time window and capped backoff; persist native cancellation across pause/resume; preserve terminal states around publication. See [CHG-20261031-002](docs/workflows/changes/2026-10-31-002-workflow-controls.md). The full phase-queue design remains a documented proposal.
 
 - Establish Workflow v0.1 as a separate, archived process baseline with diagrams, stage/evidence mapping, default rules, metric definitions, source hashes and a Git locator. Add per-batch change records, an index, a template and contributor/agent documentation conventions.

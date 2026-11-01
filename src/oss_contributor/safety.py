@@ -9,6 +9,7 @@ import tarfile
 from pathlib import PurePosixPath
 
 from .config import Limits, Repository
+from .errors import PermissionDenied, ValidationFailure
 from .models import Issue
 from .process import ContributorError
 
@@ -69,7 +70,7 @@ def safe_path(path: str) -> str:
         or "\\" in path
         or any(part in IGNORED_DIRS for part in p.parts)
     ):
-        raise ContributorError(f"unsafe repository path: {path!r}")
+        raise PermissionDenied(f"unsafe repository path: {path!r}")
     return path
 
 
@@ -156,20 +157,20 @@ def check_regression(content: str):
     try:
         tree = ast.parse(content)
     except SyntaxError as exc:
-        raise ContributorError(f"invalid regression test: {exc}") from exc
+        raise ValidationFailure(f"invalid regression test: {exc}") from exc
     if not any(isinstance(n, ast.Assert) for n in ast.walk(tree)):
-        raise ContributorError("regression must contain assertions")
+        raise ValidationFailure("regression must contain assertions")
     if not any(
         isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test_")
         for n in ast.walk(tree)
     ):
-        raise ContributorError("regression must contain pytest tests")
+        raise ValidationFailure("regression must contain pytest tests")
     if re.search(
         r"\b(skip|skipif|xfail|importorskip|exec|eval|__import__)\b|"
         r"pytest_plugins|sys\.modules|os\.environ|subprocess|socket",
         content,
     ):
-        raise ContributorError("regression contains skipping or unsafe harness manipulation")
+        raise ValidationFailure("regression contains skipping or unsafe harness manipulation")
 
 
 def validate_changes(

@@ -8,25 +8,12 @@ import threading
 import time
 from pathlib import Path
 
+from .errors import CommandTimeout
+from .errors import ContributorError as ContributorError
+from .errors import PublicationConflict as PublicationConflict
+from .errors import QuotaExhausted as QuotaExhausted
+from .errors import RateLimited as RateLimited
 from .models import CommandResult
-
-
-class ContributorError(RuntimeError):
-    pass
-
-
-class RateLimited(ContributorError):
-    def __init__(self, seconds: int = 600):
-        self.seconds = seconds
-        super().__init__(f"GitHub rate limited; retry after {seconds} seconds")
-
-
-class QuotaExhausted(ContributorError):
-    pass
-
-
-class PublicationConflict(ContributorError):
-    """A permanent conflict requires attention instead of publication retries."""
 
 
 def run_bytes(
@@ -80,7 +67,7 @@ def run_bytes(
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
-            raise ContributorError(f"Command timed out or interrupted: {argv[0]}") from None
+            raise CommandTimeout(f"Command timed out or interrupted: {argv[0]}") from None
         except KeyboardInterrupt:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()

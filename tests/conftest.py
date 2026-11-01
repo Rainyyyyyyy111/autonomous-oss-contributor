@@ -53,6 +53,25 @@ class FixtureSandbox:
     def install(self):
         return []
 
+    def tool(self, name, arguments, writable=False):
+        from oss_contributor.sandbox import DockerSandbox
+
+        return DockerSandbox.tool(self, name, arguments, writable=writable)
+
+    def bridge(self, action, **params):
+        files = self.snapshot()
+        if action == "list":
+            return sorted(files)
+        if action == "read":
+            if params["path"] not in files:
+                raise ContributorError("file not found")
+            return files[params["path"]]
+        if action == "search":
+            return [path for path, content in files.items() if params["pattern"] in content]
+        if action == "write":
+            return self.apply(params["changes"])
+        raise AssertionError(action)
+
     def apply(self, changes):
         for path, content in changes.items():
             file = self.root / path
